@@ -1,0 +1,17 @@
+# Frontend (Next.js)
+sync_space_frontend/node_modules/
+sync_space_frontend/.next/
+sync_space_frontend/out/
+sync_space_frontend/build/
+sync_space_frontend/.env*
+sync_space_frontend/.vercel
+sync_space_frontend/*.tsbuildinfo
+sync_space_frontend/next-env.d.ts
+
+# Backend (Maven)
+sync_space_backend/target/
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
