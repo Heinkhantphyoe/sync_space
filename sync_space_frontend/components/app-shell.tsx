@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { createContext, useCallback, useContext, useEffect, useState } from "react";
 
-import { apiMessage, createSpace, getMe, listSpaces } from "@/lib/api";
+import { apiMessage, createSpace, getMe, inviteMember, listSpaces } from "@/lib/api";
 import { clearSession, getToken } from "@/lib/auth";
 import type { SpaceSummary, User } from "@/lib/types";
 
@@ -36,6 +36,9 @@ export function AppShell({
   const [spaces, setSpaces] = useState<SpaceSummary[]>([]);
   const [name, setName] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [inviteEmail, setInviteEmail] = useState("");
+  const [inviteError, setInviteError] = useState<string | null>(null);
+  const [inviteNotice, setInviteNotice] = useState<string | null>(null);
 
   const refreshSpaces = useCallback(async () => {
     setSpaces(await listSpaces());
@@ -92,6 +95,36 @@ export function AppShell({
     router.replace("/login");
   }
 
+  const activeSpace = spaces.find((space) => space.id === activeSpaceId) ?? null;
+
+  useEffect(() => {
+    setInviteEmail("");
+    setInviteError(null);
+    setInviteNotice(null);
+  }, [activeSpaceId]);
+
+  async function onInvite(event: React.FormEvent) {
+    event.preventDefault();
+    if (!activeSpace || activeSpace.role !== "OWNER") {
+      return;
+    }
+    const email = inviteEmail.trim();
+    if (!email) {
+      return;
+    }
+    setInviteError(null);
+    setInviteNotice(null);
+    try {
+      await inviteMember(activeSpace.id, email);
+      setInviteEmail("");
+      setInviteNotice(`${email} can open this space now.`);
+      await refreshSpaces();
+      window.dispatchEvent(new CustomEvent("sync-space-members-changed", { detail: activeSpace.id }));
+    } catch (caught) {
+      setInviteError(apiMessage(caught));
+    }
+  }
+
   if (!user) {
     return <p className="p-8 text-muted">Opening your spaces…</p>;
   }
@@ -124,6 +157,26 @@ export function AppShell({
               </Link>
             ))}
           </nav>
+          {activeSpace?.role === "OWNER" ? (
+            <form onSubmit={onInvite} className="space-y-2 px-4 pt-3">
+              <p className="text-xs text-stone-400">Invite to {activeSpace.name}</p>
+              <input
+                type="email"
+                value={inviteEmail}
+                onChange={(event) => setInviteEmail(event.target.value)}
+                placeholder="Email address"
+                className="w-full rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm outline-none placeholder:text-stone-500 focus:border-teal-300"
+              />
+              {inviteError ? <p className="text-xs text-red-300">{inviteError}</p> : null}
+              {inviteNotice ? <p className="text-xs text-emerald-300">{inviteNotice}</p> : null}
+              <button
+                type="submit"
+                className="w-full rounded-xl border border-white/15 px-3 py-2 text-sm font-medium text-white hover:bg-white/10"
+              >
+                Invite
+              </button>
+            </form>
+          ) : null}
           <form onSubmit={onCreate} className="space-y-2 px-4 py-4">
             <input
               value={name}

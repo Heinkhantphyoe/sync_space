@@ -25,7 +25,6 @@ import {
   deleteSpace,
   deleteTask,
   getBoard,
-  inviteMember,
   moveTask,
   removeMember,
   renameColumn,
@@ -81,10 +80,13 @@ export function BoardScreen({ spaceId }: { spaceId: string }) {
         if (event.type === "MEMBERS_CHANGED" || event.type === "SPACE_UPDATED") {
           void refreshSpaces();
         }
-        if (!event.board.members.some((member) => member.userId === user.id)) {
-          void refreshSpaces();
-          router.replace("/spaces");
-          return;
+        if (event.type === "MEMBERS_CHANGED") {
+          const stillMember = event.board.members.some((member) => member.userId === user.id);
+          if (!stillMember) {
+            void refreshSpaces();
+            router.replace("/spaces");
+            return;
+          }
         }
         setBoard((current) => {
           if (!current || event.board.revision < current.revision) {
@@ -96,6 +98,23 @@ export function BoardScreen({ spaceId }: { spaceId: string }) {
       setLive,
     );
   }, [spaceId, user.id, refreshSpaces, router]);
+
+  useEffect(() => {
+    const onMembersChanged = (event: Event) => {
+      const changedSpaceId = (event as CustomEvent<string>).detail;
+      if (changedSpaceId !== spaceId) {
+        return;
+      }
+      getBoard(spaceId)
+        .then((next) => {
+          setBoard(next);
+          setError(null);
+        })
+        .catch((caught) => setError(apiMessage(caught)));
+    };
+    window.addEventListener("sync-space-members-changed", onMembersChanged);
+    return () => window.removeEventListener("sync-space-members-changed", onMembersChanged);
+  }, [spaceId]);
 
   async function run(action: () => Promise<Board>) {
     setError(null);
@@ -150,7 +169,26 @@ export function BoardScreen({ spaceId }: { spaceId: string }) {
     return <p className="p-8 text-muted">Loading board…</p>;
   }
   if (!board) {
-    return <p className="p-8 text-red-700">{error}</p>;
+    return (
+      <div className="p-8">
+        <p className="text-red-700">{error}</p>
+        <button
+          type="button"
+          className="mt-4 rounded-xl bg-accent px-4 py-2 text-sm font-medium text-accent-ink"
+          onClick={() => {
+            setError(null);
+            getBoard(spaceId)
+              .then((next) => {
+                setBoard(next);
+                setError(null);
+              })
+              .catch((caught) => setError(apiMessage(caught)));
+          }}
+        >
+          Try again
+        </button>
+      </div>
+    );
   }
 
   return (
@@ -173,7 +211,6 @@ export function BoardScreen({ spaceId }: { spaceId: string }) {
         <People
           board={board}
           currentUserId={user.id}
-          onInvite={(email) => run(() => inviteMember(spaceId, email))}
           onRemove={(userId) => run(() => removeMember(spaceId, userId))}
         />
         {board.role === "OWNER" ? (
@@ -301,16 +338,13 @@ function ColumnName({ name, onRename }: { name: string; onRename: (name: string)
 function People({
   board,
   currentUserId,
-  onInvite,
   onRemove,
 }: {
   board: Board;
   currentUserId: string;
-  onInvite: (email: string) => void;
   onRemove: (userId: string) => void;
 }) {
   const [open, setOpen] = useState(false);
-  const [email, setEmail] = useState("");
 
   return (
     <div className="relative">
@@ -349,31 +383,6 @@ function People({
               </li>
             ))}
           </ul>
-          {board.role === "OWNER" ? (
-            <form
-              className="mt-3 flex gap-2"
-              onSubmit={(event) => {
-                event.preventDefault();
-                const trimmed = email.trim();
-                if (!trimmed) {
-                  return;
-                }
-                onInvite(trimmed);
-                setEmail("");
-              }}
-            >
-              <input
-                type="email"
-                value={email}
-                onChange={(event) => setEmail(event.target.value)}
-                placeholder="Invite by email"
-                className="min-w-0 flex-1 rounded-xl border border-line px-2 py-1.5 text-sm outline-none focus:border-accent"
-              />
-              <button type="submit" className="rounded-xl bg-ink px-3 py-1.5 text-sm text-white">
-                Invite
-              </button>
-            </form>
-          ) : null}
         </div>
       ) : null}
     </div>
