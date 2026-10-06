@@ -58,3 +58,15 @@ export type BoardEvent = {
   type: string;
   board: BoardState;
 };
+
+export type TaskActivityKind = "CREATED" | "MOVED" | "RENAMED" | "DESCRIPTION_CHANGED" | "COMMENT";
+
+export type TaskActivity = {
+  id: string;
+  kind: TaskActivityKind;
+  actorId: string;
+  actorName: string;
+  summary: string | null;
+  body: string | null;
+  createdAt: string;
+};

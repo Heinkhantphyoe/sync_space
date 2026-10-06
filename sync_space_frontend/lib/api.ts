@@ -1,5 +1,5 @@
 import { clearSession, getToken } from "@/lib/auth";
-import type { AuthResponse, Board, SpaceSummary, User } from "@/lib/types";
+import type { AuthResponse, Board, SpaceSummary, TaskActivity, User } from "@/lib/types";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8080";
 
@@ -164,6 +164,17 @@ export function moveTask(
   return request<Board>(`/api/spaces/${spaceId}/tasks/${taskId}/move`, {
     method: "POST",
     body: JSON.stringify(body),
+  });
+}
+
+export function getTaskActivity(spaceId: string, taskId: string) {
+  return request<TaskActivity[]>(`/api/spaces/${spaceId}/tasks/${taskId}/activity`);
+}
+
+export function addTaskComment(spaceId: string, taskId: string, body: string) {
+  return request<TaskActivity[]>(`/api/spaces/${spaceId}/tasks/${taskId}/comments`, {
+    method: "POST",
+    body: JSON.stringify({ body }),
   });
 }
 

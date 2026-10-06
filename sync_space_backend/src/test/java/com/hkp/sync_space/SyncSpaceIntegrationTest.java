@@ -1,5 +1,6 @@
 package com.hkp.sync_space;
 
+import static org.hamcrest.Matchers.hasItem;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
@@ -112,6 +113,103 @@ class SyncSpaceIntegrationTest {
 						.content("{\"name\":\"Launch plan\"}"))
 				.andExpect(status().isOk())
 				.andExpect(jsonPath("$.spaceName").value("Launch plan"));
+	}
+
+	@Test
+	void taskCommentsAndActivity() throws Exception {
+		register("ada.activity@example.com", "Ada");
+		register("grace.activity@example.com", "Grace");
+		register("outsider.activity@example.com", "Outsider");
+		String ada = login("ada.activity@example.com");
+		String grace = login("grace.activity@example.com");
+		String outsider = login("outsider.activity@example.com");
+
+		MvcResult created = mvc.perform(post("/api/spaces")
+						.header("Authorization", "Bearer " + ada)
+						.contentType(MediaType.APPLICATION_JSON)
+						.content("{\"name\":\"Activity\"}"))
+				.andExpect(status().isCreated())
+				.andReturn();
+		String spaceId = JsonPath.read(created.getResponse().getContentAsString(), "$.id");
+		mvc.perform(post("/api/spaces/" + spaceId + "/members")
+						.header("Authorization", "Bearer " + ada)
+						.contentType(MediaType.APPLICATION_JSON)
+						.content("{\"email\":\"grace.activity@example.com\"}"))
+				.andExpect(status().isOk());
+
+		String board = mvc.perform(get("/api/spaces/" + spaceId + "/board").header("Authorization", "Bearer " + ada))
+				.andExpect(status().isOk())
+				.andReturn()
+				.getResponse()
+				.getContentAsString();
+		String todoId = JsonPath.read(board, "$.columns[0].id");
+		String progressId = JsonPath.read(board, "$.columns[1].id");
+
+		String withTask = mvc.perform(post("/api/spaces/" + spaceId + "/tasks")
+						.header("Authorization", "Bearer " + ada)
+						.contentType(MediaType.APPLICATION_JSON)
+						.content("{\"columnId\":\"" + todoId + "\",\"title\":\"Write spec\"}"))
+				.andExpect(status().isOk())
+				.andReturn()
+				.getResponse()
+				.getContentAsString();
+		String taskId = JsonPath.read(withTask, "$.columns[0].tasks[0].id");
+
+		mvc.perform(get("/api/spaces/" + spaceId + "/tasks/" + taskId + "/activity")
+						.header("Authorization", "Bearer " + ada))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.length()").value(1))
+				.andExpect(jsonPath("$[0].kind").value("CREATED"))
+				.andExpect(jsonPath("$[0].actorName").value("Ada"))
+				.andExpect(jsonPath("$[0].summary").value("created this task"));
+
+		mvc.perform(post("/api/spaces/" + spaceId + "/tasks/" + taskId + "/move")
+						.header("Authorization", "Bearer " + ada)
+						.contentType(MediaType.APPLICATION_JSON)
+						.content("{\"toColumnId\":\"" + todoId + "\",\"toIndex\":0}"))
+				.andExpect(status().isOk());
+		mvc.perform(get("/api/spaces/" + spaceId + "/tasks/" + taskId + "/activity")
+						.header("Authorization", "Bearer " + ada))
+				.andExpect(jsonPath("$.length()").value(1));
+
+		mvc.perform(post("/api/spaces/" + spaceId + "/tasks/" + taskId + "/move")
+						.header("Authorization", "Bearer " + ada)
+						.contentType(MediaType.APPLICATION_JSON)
+						.content("{\"toColumnId\":\"" + progressId + "\",\"toIndex\":0}"))
+				.andExpect(status().isOk());
+		mvc.perform(patch("/api/spaces/" + spaceId + "/tasks/" + taskId)
+						.header("Authorization", "Bearer " + ada)
+						.contentType(MediaType.APPLICATION_JSON)
+						.content("{\"title\":\"Write the spec\",\"description\":\"Notes\"}"))
+				.andExpect(status().isOk());
+		mvc.perform(patch("/api/spaces/" + spaceId + "/tasks/" + taskId)
+						.header("Authorization", "Bearer " + ada)
+						.contentType(MediaType.APPLICATION_JSON)
+						.content("{\"title\":\"Write the spec\",\"description\":\"Notes\"}"))
+				.andExpect(status().isOk());
+
+		mvc.perform(post("/api/spaces/" + spaceId + "/tasks/" + taskId + "/comments")
+						.header("Authorization", "Bearer " + grace)
+						.contentType(MediaType.APPLICATION_JSON)
+						.content("{\"body\":\"Looks good\"}"))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.length()").value(5))
+				.andExpect(jsonPath("$[?(@.kind == 'MOVED')].summary", hasItem("moved this to In Progress")))
+				.andExpect(jsonPath("$[?(@.kind == 'RENAMED')].summary", hasItem("renamed this to Write the spec")))
+				.andExpect(jsonPath("$[?(@.kind == 'DESCRIPTION_CHANGED')].summary", hasItem("updated the description")))
+				.andExpect(jsonPath("$[?(@.kind == 'COMMENT')].body", hasItem("Looks good")))
+				.andExpect(jsonPath("$[?(@.kind == 'COMMENT')].actorName", hasItem("Grace")));
+
+		mvc.perform(post("/api/spaces/" + spaceId + "/tasks/" + taskId + "/comments")
+						.header("Authorization", "Bearer " + ada)
+						.contentType(MediaType.APPLICATION_JSON)
+						.content("{\"body\":\"   \"}"))
+				.andExpect(status().isBadRequest())
+				.andExpect(jsonPath("$.message").value("Comment is required"));
+
+		mvc.perform(get("/api/spaces/" + spaceId + "/tasks/" + taskId + "/activity")
+						.header("Authorization", "Bearer " + outsider))
+				.andExpect(status().isForbidden());
 	}
 
 	private void register(String email, String name) throws Exception {

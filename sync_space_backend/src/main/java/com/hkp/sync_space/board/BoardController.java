@@ -1,5 +1,6 @@
 package com.hkp.sync_space.board;
 
+import java.util.List;
 import java.util.UUID;
 
 import jakarta.validation.Valid;
@@ -71,6 +72,17 @@ public class BoardController {
 	BoardResponse moveTask(@PathVariable UUID spaceId, @PathVariable UUID taskId,
 			@Valid @RequestBody MoveTaskRequest request) {
 		return boardService.moveTask(spaceId, taskId, CurrentUser.get(), request);
+	}
+
+	@GetMapping("/tasks/{taskId}/activity")
+	List<TaskActivityResponse> activity(@PathVariable UUID spaceId, @PathVariable UUID taskId) {
+		return boardService.activity(spaceId, taskId, CurrentUser.get());
+	}
+
+	@PostMapping("/tasks/{taskId}/comments")
+	List<TaskActivityResponse> comment(@PathVariable UUID spaceId, @PathVariable UUID taskId,
+			@Valid @RequestBody CreateCommentRequest request) {
+		return boardService.addComment(spaceId, taskId, CurrentUser.get(), request);
 	}
 
 }

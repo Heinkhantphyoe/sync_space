@@ -6,6 +6,7 @@ import java.util.Comparator;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.UUID;
 import java.util.stream.Collectors;
 
@@ -33,17 +34,20 @@ public class BoardService {
 	private final SpaceMemberRepository memberRepository;
 	private final BoardColumnRepository columnRepository;
 	private final TaskRepository taskRepository;
+	private final TaskActivityRepository activityRepository;
 	private final UserRepository userRepository;
 	private final SpaceAccess spaceAccess;
 	private final ApplicationEventPublisher events;
 
 	public BoardService(SpaceRepository spaceRepository, SpaceMemberRepository memberRepository,
-			BoardColumnRepository columnRepository, TaskRepository taskRepository, UserRepository userRepository,
-			SpaceAccess spaceAccess, ApplicationEventPublisher events) {
+			BoardColumnRepository columnRepository, TaskRepository taskRepository,
+			TaskActivityRepository activityRepository, UserRepository userRepository, SpaceAccess spaceAccess,
+			ApplicationEventPublisher events) {
 		this.spaceRepository = spaceRepository;
 		this.memberRepository = memberRepository;
 		this.columnRepository = columnRepository;
 		this.taskRepository = taskRepository;
+		this.activityRepository = activityRepository;
 		this.userRepository = userRepository;
 		this.spaceAccess = spaceAccess;
 		this.events = events;
@@ -131,7 +135,9 @@ public class BoardService {
 				.orElseThrow(() -> new ApiException(HttpStatus.UNAUTHORIZED, "Login required"));
 		int position = taskRepository.findByColumnIdOrderByPositionAsc(column.getId()).size();
 		String description = blankToNull(request.description());
-		taskRepository.save(new Task(member.getSpace(), column, request.title().trim(), description, position, creator));
+		Task created = taskRepository.save(
+				new Task(member.getSpace(), column, request.title().trim(), description, position, creator));
+		record(member.getSpace(), created, creator, TaskActivityKind.CREATED, null, Instant.now());
 		return touchAndPublish(member, BoardEvents.TASK_CREATED);
 	}
 
@@ -142,15 +148,25 @@ public class BoardService {
 			throw new ApiException(HttpStatus.BAD_REQUEST, "Nothing to update");
 		}
 		Task task = task(spaceId, taskId);
+		User actorUser = user(actor.id());
+		Instant stamp = Instant.now();
 		if (request.title() != null) {
 			String title = request.title().trim();
 			if (title.isEmpty()) {
 				throw new ApiException(HttpStatus.BAD_REQUEST, "Title is required");
 			}
-			task.setTitle(title);
+			if (!title.equals(task.getTitle())) {
+				task.setTitle(title);
+				record(member.getSpace(), task, actorUser, TaskActivityKind.RENAMED, title, stamp);
+				stamp = stamp.plusMillis(1);
+			}
 		}
 		if (request.description() != null) {
-			task.setDescription(blankToNull(request.description()));
+			String description = blankToNull(request.description());
+			if (!Objects.equals(description, task.getDescription())) {
+				task.setDescription(description);
+				record(member.getSpace(), task, actorUser, TaskActivityKind.DESCRIPTION_CHANGED, null, stamp);
+			}
 		}
 		task.setUpdatedAt(Instant.now());
 		return touchAndPublish(member, BoardEvents.TASK_UPDATED);
@@ -188,8 +204,30 @@ public class BoardService {
 			toTasks.add(clamp(request.toIndex(), toTasks.size()), task);
 			rewrite(toTasks);
 		}
+		if (!fromColumnId.equals(target.getId())) {
+			record(member.getSpace(), task, user(actor.id()), TaskActivityKind.MOVED, target.getName(), Instant.now());
+		}
 		task.setUpdatedAt(Instant.now());
 		return touchAndPublish(member, BoardEvents.TASK_MOVED);
+	}
+
+	public List<TaskActivityResponse> activity(UUID spaceId, UUID taskId, AuthUser actor) {
+		spaceAccess.requireMember(spaceId, actor.id());
+		task(spaceId, taskId);
+		return activityRepository.findForTask(spaceId, taskId).stream().map(this::toActivity).toList();
+	}
+
+	@Transactional
+	public List<TaskActivityResponse> addComment(UUID spaceId, UUID taskId, AuthUser actor, CreateCommentRequest request) {
+		SpaceMember member = spaceAccess.lockMember(spaceId, actor.id());
+		Task task = task(spaceId, taskId);
+		String body = request.body().trim();
+		if (body.isEmpty()) {
+			throw new ApiException(HttpStatus.BAD_REQUEST, "Comment is required");
+		}
+		record(member.getSpace(), task, user(actor.id()), TaskActivityKind.COMMENT, body, Instant.now());
+		touchAndPublish(member, BoardEvents.TASK_COMMENTED);
+		return activityRepository.findForTask(spaceId, taskId).stream().map(this::toActivity).toList();
 	}
 
 	private BoardResponse touchAndPublish(SpaceMember member, String type) {
@@ -208,6 +246,28 @@ public class BoardService {
 	private Task task(UUID spaceId, UUID taskId) {
 		return taskRepository.findByIdAndSpaceId(taskId, spaceId)
 				.orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Task not found"));
+	}
+
+	private void record(Space space, Task task, User actor, TaskActivityKind kind, String body, Instant createdAt) {
+		activityRepository.save(new TaskActivity(space, task, actor, kind, body, createdAt));
+	}
+
+	private User user(UUID id) {
+		return userRepository.findById(id)
+				.orElseThrow(() -> new ApiException(HttpStatus.UNAUTHORIZED, "Login required"));
+	}
+
+	private TaskActivityResponse toActivity(TaskActivity entry) {
+		String summary = switch (entry.getKind()) {
+			case CREATED -> "created this task";
+			case MOVED -> "moved this to " + entry.getBody();
+			case RENAMED -> "renamed this to " + entry.getBody();
+			case DESCRIPTION_CHANGED -> "updated the description";
+			case COMMENT -> null;
+		};
+		String body = entry.getKind() == TaskActivityKind.COMMENT ? entry.getBody() : null;
+		return new TaskActivityResponse(entry.getId(), entry.getKind().name(), entry.getActor().getId(),
+				entry.getActor().getDisplayName(), summary, body, entry.getCreatedAt());
 	}
 
 	private TaskResponse toTask(Task task) {

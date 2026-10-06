@@ -14,10 +14,11 @@ import {
 import { SortableContext, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { useShell } from "@/components/app-shell";
 import {
+  addTaskComment,
   apiMessage,
   createColumn,
   createTask,
@@ -25,6 +26,7 @@ import {
   deleteSpace,
   deleteTask,
   getBoard,
+  getTaskActivity,
   moveTask,
   removeMember,
   renameColumn,
@@ -33,7 +35,7 @@ import {
   updateTask,
 } from "@/lib/api";
 import { connectBoardSocket } from "@/lib/board-socket";
-import type { Board, Column, Task } from "@/lib/types";
+import type { Board, Column, Task, TaskActivity } from "@/lib/types";
 
 export function BoardScreen({ spaceId }: { spaceId: string }) {
   const router = useRouter();
@@ -98,6 +100,16 @@ export function BoardScreen({ spaceId }: { spaceId: string }) {
       setLive,
     );
   }, [spaceId, user.id, refreshSpaces, router]);
+
+  useEffect(() => {
+    if (!editing || !board) {
+      return;
+    }
+    const exists = board.columns.some((column) => column.tasks.some((task) => task.id === editing.id));
+    if (!exists) {
+      setEditing(null);
+    }
+  }, [board, editing]);
 
   useEffect(() => {
     const onMembersChanged = (event: Event) => {
@@ -273,6 +285,8 @@ export function BoardScreen({ spaceId }: { spaceId: string }) {
       {editing ? (
         <TaskEditor
           task={editing}
+          spaceId={spaceId}
+          revision={board.revision}
           onClose={() => setEditing(null)}
           onSave={async (title, description) => {
             applyBoard(await updateTask(spaceId, editing.id, title, description));
@@ -512,11 +526,15 @@ function AddColumn({ onCreate }: { onCreate: (name: string) => void }) {
 
 function TaskEditor({
   task,
+  spaceId,
+  revision,
   onClose,
   onSave,
   onDelete,
 }: {
   task: Task;
+  spaceId: string;
+  revision: number;
   onClose: () => void;
   onSave: (title: string, description: string) => Promise<void>;
   onDelete: () => Promise<void>;
@@ -524,54 +542,175 @@ function TaskEditor({
   const [title, setTitle] = useState(task.title);
   const [description, setDescription] = useState(task.description ?? "");
   const [error, setError] = useState<string | null>(null);
+  const [entries, setEntries] = useState<TaskActivity[] | null>(null);
+  const [activityError, setActivityError] = useState<string | null>(null);
+  const [comment, setComment] = useState("");
+  const [posting, setPosting] = useState(false);
+  const listRef = useRef<HTMLDivElement>(null);
+  const requestSeq = useRef(0);
+
+  useEffect(() => {
+    const id = ++requestSeq.current;
+    getTaskActivity(spaceId, task.id)
+      .then((next) => {
+        if (id === requestSeq.current) {
+          setEntries(next);
+          setActivityError(null);
+        }
+      })
+      .catch((caught) => {
+        if (id === requestSeq.current) {
+          setActivityError(apiMessage(caught));
+        }
+      });
+  }, [spaceId, task.id, revision]);
+
+  useEffect(() => {
+    if (listRef.current) {
+      listRef.current.scrollTop = listRef.current.scrollHeight;
+    }
+  }, [entries]);
 
   return (
-    <div className="fixed inset-0 z-30 flex items-center justify-center bg-ink/40 p-4">
-      <form
-        className="w-full max-w-lg rounded-3xl bg-paper p-6"
-        onSubmit={async (event) => {
-          event.preventDefault();
-          try {
-            await onSave(title.trim(), description);
-          } catch (caught) {
-            setError(apiMessage(caught));
-          }
-        }}
-      >
-        <label className="block text-sm font-medium">
-          Title
-          <input
-            value={title}
-            onChange={(event) => setTitle(event.target.value)}
-            className="mt-1 w-full rounded-xl border border-line px-3 py-2 outline-none focus:border-accent"
-          />
-        </label>
-        <label className="mt-4 block text-sm font-medium">
-          Description
-          <textarea
-            value={description}
-            onChange={(event) => setDescription(event.target.value)}
-            rows={5}
-            className="mt-1 w-full rounded-xl border border-line px-3 py-2 outline-none focus:border-accent"
-          />
-        </label>
-        {error ? <p className="mt-2 text-sm text-red-700">{error}</p> : null}
-        <div className="mt-5 flex items-center justify-between">
-          <button type="button" className="text-sm text-red-700" onClick={() => void onDelete()}>
-            Delete task
-          </button>
-          <div className="flex gap-2">
-            <button type="button" onClick={onClose} className="rounded-xl px-3 py-2 text-sm">
-              Cancel
-            </button>
-            <button type="submit" className="rounded-xl bg-accent px-4 py-2 text-sm font-medium text-accent-ink">
-              Save
-            </button>
-          </div>
+    <div className="fixed inset-0 z-30 overflow-y-auto bg-ink/40 p-4">
+      <div className="mx-auto flex min-h-full w-full max-w-xl items-center">
+        <div className="w-full rounded-3xl bg-paper p-6">
+          <form
+            onSubmit={async (event) => {
+              event.preventDefault();
+              try {
+                await onSave(title.trim(), description);
+              } catch (caught) {
+                setError(apiMessage(caught));
+              }
+            }}
+          >
+            <label className="block text-sm font-medium">
+              Title
+              <input
+                value={title}
+                onChange={(event) => setTitle(event.target.value)}
+                className="mt-1 w-full rounded-xl border border-line px-3 py-2 outline-none focus:border-accent"
+              />
+            </label>
+            <label className="mt-4 block text-sm font-medium">
+              Description
+              <textarea
+                value={description}
+                onChange={(event) => setDescription(event.target.value)}
+                rows={4}
+                className="mt-1 w-full rounded-xl border border-line px-3 py-2 outline-none focus:border-accent"
+              />
+            </label>
+            {error ? <p className="mt-2 text-sm text-red-700">{error}</p> : null}
+            <div className="mt-5 flex items-center justify-between">
+              <button type="button" className="text-sm text-red-700" onClick={() => void onDelete()}>
+                Delete task
+              </button>
+              <div className="flex gap-2">
+                <button type="button" onClick={onClose} className="rounded-xl px-3 py-2 text-sm">
+                  Cancel
+                </button>
+                <button type="submit" className="rounded-xl bg-accent px-4 py-2 text-sm font-medium text-accent-ink">
+                  Save
+                </button>
+              </div>
+            </div>
+          </form>
+          <section className="mt-6 border-t border-line pt-5">
+            <h2 className="text-sm font-medium">Activity</h2>
+            <div ref={listRef} className="mt-3 max-h-64 space-y-3 overflow-y-auto pr-1">
+              {entries === null && !activityError ? <p className="text-sm text-muted">Loading activity…</p> : null}
+              {activityError ? <p className="text-sm text-red-700">{activityError}</p> : null}
+              {entries?.length === 0 ? <p className="text-sm text-muted">No activity yet.</p> : null}
+              {entries?.map((entry) =>
+                entry.kind === "COMMENT" ? (
+                  <article key={entry.id} className="rounded-2xl bg-column px-3 py-2">
+                    <div className="flex items-center gap-2">
+                      <span className="flex h-6 w-6 items-center justify-center rounded-full bg-accent text-[10px] font-medium text-accent-ink">
+                        {initials(entry.actorName)}
+                      </span>
+                      <p className="text-sm font-medium">{entry.actorName}</p>
+                      <time className="ml-auto text-xs text-muted" dateTime={entry.createdAt}>
+                        {formatActivityTime(entry.createdAt)}
+                      </time>
+                    </div>
+                    <p className="mt-1 whitespace-pre-wrap pl-8 text-sm">{entry.body}</p>
+                  </article>
+                ) : (
+                  <p key={entry.id} className="text-sm text-muted">
+                    <span className="font-medium text-ink">{entry.actorName}</span> {entry.summary}
+                    <time className="ml-2 text-xs" dateTime={entry.createdAt}>
+                      {formatActivityTime(entry.createdAt)}
+                    </time>
+                  </p>
+                ),
+              )}
+            </div>
+            <form
+              className="mt-4"
+              onSubmit={async (event) => {
+                event.preventDefault();
+                const body = comment.trim();
+                if (!body || posting) {
+                  return;
+                }
+                const id = ++requestSeq.current;
+                setPosting(true);
+                setActivityError(null);
+                try {
+                  const next = await addTaskComment(spaceId, task.id, body);
+                  setComment("");
+                  if (id === requestSeq.current) {
+                    setEntries(next);
+                  }
+                } catch (caught) {
+                  if (id === requestSeq.current) {
+                    setActivityError(apiMessage(caught));
+                  }
+                } finally {
+                  setPosting(false);
+                }
+              }}
+            >
+              <label className="block text-sm font-medium">
+                Comment
+                <textarea
+                  value={comment}
+                  onChange={(event) => setComment(event.target.value)}
+                  rows={2}
+                  placeholder="Leave a comment"
+                  className="mt-1 w-full rounded-xl border border-line px-3 py-2 outline-none focus:border-accent"
+                />
+              </label>
+              <div className="mt-2 flex justify-end">
+                <button
+                  type="submit"
+                  disabled={posting || comment.trim().length === 0}
+                  className="rounded-xl bg-accent px-4 py-2 text-sm font-medium text-accent-ink disabled:opacity-50"
+                >
+                  {posting ? "Posting…" : "Comment"}
+                </button>
+              </div>
+            </form>
+          </section>
         </div>
-      </form>
+      </div>
     </div>
   );
+}
+
+function formatActivityTime(iso: string) {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) {
+    return "";
+  }
+  return new Intl.DateTimeFormat(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(date);
 }
 
 function findColumn(board: Board, id: string) {

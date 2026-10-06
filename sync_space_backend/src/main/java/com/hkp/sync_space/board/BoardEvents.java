@@ -6,6 +6,7 @@ public final class BoardEvents {
 	public static final String TASK_UPDATED = "TASK_UPDATED";
 	public static final String TASK_MOVED = "TASK_MOVED";
 	public static final String TASK_DELETED = "TASK_DELETED";
+	public static final String TASK_COMMENTED = "TASK_COMMENTED";
 	public static final String COLUMN_CREATED = "COLUMN_CREATED";
 	public static final String COLUMN_UPDATED = "COLUMN_UPDATED";
 	public static final String COLUMN_REORDERED = "COLUMN_REORDERED";
