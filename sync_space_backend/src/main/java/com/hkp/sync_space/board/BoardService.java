@@ -3,6 +3,7 @@ package com.hkp.sync_space.board;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.EnumSet;
 import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -146,29 +147,27 @@ public class BoardService {
 	@Transactional
 	public BoardResponse updateTask(UUID spaceId, UUID taskId, AuthUser actor, UpdateTaskRequest request) {
 		SpaceMember member = spaceAccess.lockMember(spaceId, actor.id());
-		if (request.title() == null && request.description() == null) {
+		if (request.title() == null && request.description() == null && request.userIds() == null
+				&& request.labels() == null && request.priority() == null) {
 			throw new ApiException(HttpStatus.BAD_REQUEST, "Nothing to update");
 		}
 		Task task = task(spaceId, taskId);
 		User actorUser = user(actor.id());
 		Instant stamp = Instant.now();
 		if (request.title() != null) {
-			String title = request.title().trim();
-			if (title.isEmpty()) {
-				throw new ApiException(HttpStatus.BAD_REQUEST, "Title is required");
-			}
-			if (!title.equals(task.getTitle())) {
-				task.setTitle(title);
-				record(member.getSpace(), task, actorUser, TaskActivityKind.RENAMED, title, stamp);
-				stamp = stamp.plusMillis(1);
-			}
+			stamp = applyTitle(member.getSpace(), task, actorUser, request.title(), stamp);
 		}
 		if (request.description() != null) {
-			String description = blankToNull(request.description());
-			if (!Objects.equals(description, task.getDescription())) {
-				task.setDescription(description);
-				record(member.getSpace(), task, actorUser, TaskActivityKind.DESCRIPTION_CHANGED, null, stamp);
-			}
+			stamp = applyDescription(member.getSpace(), task, actorUser, request.description(), stamp);
+		}
+		if (request.labels() != null) {
+			stamp = applyLabels(member.getSpace(), task, actorUser, request.labels(), stamp);
+		}
+		if (request.priority() != null) {
+			stamp = applyPriority(member.getSpace(), task, actorUser, request.priority(), stamp);
+		}
+		if (request.userIds() != null) {
+			stamp = applyAssignees(spaceId, member.getSpace(), task, actorUser, request.userIds(), stamp);
 		}
 		task.setUpdatedAt(Instant.now());
 		return touchAndPublish(member, BoardEvents.TASK_UPDATED);
@@ -217,42 +216,39 @@ public class BoardService {
 	public BoardResponse assign(UUID spaceId, UUID taskId, AuthUser actor, AssignTaskRequest request) {
 		SpaceMember member = spaceAccess.lockMember(spaceId, actor.id());
 		Task task = task(spaceId, taskId);
-		LinkedHashSet<UUID> requested = new LinkedHashSet<>();
-		for (UUID userId : request.userIds()) {
-			if (userId == null) {
-				throw new ApiException(HttpStatus.BAD_REQUEST, "Only people in this space can be assigned");
-			}
-			requested.add(userId);
-		}
-		Set<UUID> memberIds = memberRepository.findBySpaceId(spaceId).stream()
-				.map(spaceMember -> spaceMember.getUser().getId())
-				.collect(Collectors.toSet());
-		if (!memberIds.containsAll(requested)) {
-			throw new ApiException(HttpStatus.BAD_REQUEST, "Only people in this space can be assigned");
-		}
-		Set<UUID> currentIds = task.getAssignees().stream().map(User::getId).collect(Collectors.toSet());
-		if (currentIds.equals(requested)) {
+		User actorUser = user(actor.id());
+		Instant start = Instant.now();
+		Instant stamp = applyAssignees(spaceId, member.getSpace(), task, actorUser, request.userIds(), start);
+		if (stamp.equals(start)) {
 			return BoardResponses.from(loadState(spaceId), member.getRole());
 		}
-		Map<UUID, User> usersById = userRepository.findAllById(requested).stream()
-				.collect(Collectors.toMap(User::getId, user -> user));
+		task.setUpdatedAt(Instant.now());
+		return touchAndPublish(member, BoardEvents.TASK_UPDATED);
+	}
+
+	@Transactional
+	public BoardResponse setLabels(UUID spaceId, UUID taskId, AuthUser actor, SetTaskLabelsRequest request) {
+		SpaceMember member = spaceAccess.lockMember(spaceId, actor.id());
+		Task task = task(spaceId, taskId);
 		User actorUser = user(actor.id());
-		Instant stamp = Instant.now();
-		List<User> removed = task.getAssignees().stream()
-				.filter(assignee -> !requested.contains(assignee.getId()))
-				.toList();
-		for (User assignee : removed) {
-			task.getAssignees().remove(assignee);
-			record(member.getSpace(), task, actorUser, TaskActivityKind.UNASSIGNED, assignee.getDisplayName(), stamp);
-			stamp = stamp.plusMillis(1);
+		Instant start = Instant.now();
+		Instant stamp = applyLabels(member.getSpace(), task, actorUser, request.labels(), start);
+		if (stamp.equals(start)) {
+			return BoardResponses.from(loadState(spaceId), member.getRole());
 		}
-		for (UUID userId : requested) {
-			if (!currentIds.contains(userId)) {
-				User assignee = usersById.get(userId);
-				task.getAssignees().add(assignee);
-				record(member.getSpace(), task, actorUser, TaskActivityKind.ASSIGNED, assignee.getDisplayName(), stamp);
-				stamp = stamp.plusMillis(1);
-			}
+		task.setUpdatedAt(Instant.now());
+		return touchAndPublish(member, BoardEvents.TASK_UPDATED);
+	}
+
+	@Transactional
+	public BoardResponse setPriority(UUID spaceId, UUID taskId, AuthUser actor, SetTaskPriorityRequest request) {
+		SpaceMember member = spaceAccess.lockMember(spaceId, actor.id());
+		Task task = task(spaceId, taskId);
+		User actorUser = user(actor.id());
+		Instant start = Instant.now();
+		Instant stamp = applyPriority(member.getSpace(), task, actorUser, request.priority(), start);
+		if (stamp.equals(start)) {
+			return BoardResponses.from(loadState(spaceId), member.getRole());
 		}
 		task.setUpdatedAt(Instant.now());
 		return touchAndPublish(member, BoardEvents.TASK_UPDATED);
@@ -315,6 +311,110 @@ public class BoardService {
 				.orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Task not found"));
 	}
 
+	private Instant applyTitle(Space space, Task task, User actor, String rawTitle, Instant stamp) {
+		String title = rawTitle.trim();
+		if (title.isEmpty()) {
+			throw new ApiException(HttpStatus.BAD_REQUEST, "Title is required");
+		}
+		if (title.equals(task.getTitle())) {
+			return stamp;
+		}
+		task.setTitle(title);
+		record(space, task, actor, TaskActivityKind.RENAMED, title, stamp);
+		return stamp.plusMillis(1);
+	}
+
+	private Instant applyDescription(Space space, Task task, User actor, String rawDescription, Instant stamp) {
+		String description = blankToNull(rawDescription);
+		if (Objects.equals(description, task.getDescription())) {
+			return stamp;
+		}
+		task.setDescription(description);
+		record(space, task, actor, TaskActivityKind.DESCRIPTION_CHANGED, null, stamp);
+		return stamp.plusMillis(1);
+	}
+
+	private Instant applyLabels(Space space, Task task, User actor, List<TaskLabel> labels, Instant stamp) {
+		LinkedHashSet<TaskLabel> requested = new LinkedHashSet<>();
+		for (TaskLabel label : labels) {
+			if (label == null) {
+				throw new ApiException(HttpStatus.BAD_REQUEST, "Unknown label");
+			}
+			requested.add(label);
+		}
+		Set<TaskLabel> current = EnumSet.noneOf(TaskLabel.class);
+		current.addAll(task.getLabels());
+		if (current.equals(requested)) {
+			return stamp;
+		}
+		for (TaskLabel label : List.copyOf(task.getLabels())) {
+			if (!requested.contains(label)) {
+				task.getLabels().remove(label);
+				record(space, task, actor, TaskActivityKind.UNLABELED, label.displayName(), stamp);
+				stamp = stamp.plusMillis(1);
+			}
+		}
+		for (TaskLabel label : requested) {
+			if (!current.contains(label)) {
+				task.getLabels().add(label);
+				record(space, task, actor, TaskActivityKind.LABELED, label.displayName(), stamp);
+				stamp = stamp.plusMillis(1);
+			}
+		}
+		return stamp;
+	}
+
+	private Instant applyPriority(Space space, Task task, User actor, TaskPriority priority, Instant stamp) {
+		if (priority == null) {
+			throw new ApiException(HttpStatus.BAD_REQUEST, "Priority is required");
+		}
+		if (task.getPriority() == priority) {
+			return stamp;
+		}
+		task.setPriority(priority);
+		record(space, task, actor, TaskActivityKind.PRIORITY_CHANGED, priority.displayName(), stamp);
+		return stamp.plusMillis(1);
+	}
+
+	private Instant applyAssignees(UUID spaceId, Space space, Task task, User actor, List<UUID> userIds, Instant stamp) {
+		LinkedHashSet<UUID> requested = new LinkedHashSet<>();
+		for (UUID userId : userIds) {
+			if (userId == null) {
+				throw new ApiException(HttpStatus.BAD_REQUEST, "Only people in this space can be assigned");
+			}
+			requested.add(userId);
+		}
+		Set<UUID> memberIds = memberRepository.findBySpaceId(spaceId).stream()
+				.map(spaceMember -> spaceMember.getUser().getId())
+				.collect(Collectors.toSet());
+		if (!memberIds.containsAll(requested)) {
+			throw new ApiException(HttpStatus.BAD_REQUEST, "Only people in this space can be assigned");
+		}
+		Set<UUID> currentIds = task.getAssignees().stream().map(User::getId).collect(Collectors.toSet());
+		if (currentIds.equals(requested)) {
+			return stamp;
+		}
+		Map<UUID, User> usersById = userRepository.findAllById(requested).stream()
+				.collect(Collectors.toMap(User::getId, user -> user));
+		List<User> removed = task.getAssignees().stream()
+				.filter(assignee -> !requested.contains(assignee.getId()))
+				.toList();
+		for (User assignee : removed) {
+			task.getAssignees().remove(assignee);
+			record(space, task, actor, TaskActivityKind.UNASSIGNED, assignee.getDisplayName(), stamp);
+			stamp = stamp.plusMillis(1);
+		}
+		for (UUID userId : requested) {
+			if (!currentIds.contains(userId)) {
+				User assignee = usersById.get(userId);
+				task.getAssignees().add(assignee);
+				record(space, task, actor, TaskActivityKind.ASSIGNED, assignee.getDisplayName(), stamp);
+				stamp = stamp.plusMillis(1);
+			}
+		}
+		return stamp;
+	}
+
 	private void record(Space space, Task task, User actor, TaskActivityKind kind, String body, Instant createdAt) {
 		activityRepository.save(new TaskActivity(space, task, actor, kind, body, createdAt));
 	}
@@ -333,6 +433,9 @@ public class BoardService {
 			case COMMENT -> null;
 			case ASSIGNED -> "assigned " + entry.getBody();
 			case UNASSIGNED -> "unassigned " + entry.getBody();
+			case LABELED -> "added the " + entry.getBody() + " label";
+			case UNLABELED -> "removed the " + entry.getBody() + " label";
+			case PRIORITY_CHANGED -> "set priority to " + entry.getBody();
 		};
 		String body = entry.getKind() == TaskActivityKind.COMMENT ? entry.getBody() : null;
 		return new TaskActivityResponse(entry.getId(), entry.getKind().name(), entry.getActor().getId(),
@@ -344,8 +447,12 @@ public class BoardService {
 				.sorted(Comparator.comparing(User::getDisplayName, String.CASE_INSENSITIVE_ORDER))
 				.map(assignee -> new AssigneeResponse(assignee.getId(), assignee.getDisplayName()))
 				.toList();
+		List<TaskLabel> labels = task.getLabels().stream()
+				.sorted(Comparator.comparingInt(TaskLabel::ordinal))
+				.toList();
 		return new TaskResponse(task.getId(), task.getColumn().getId(), task.getTitle(), task.getDescription(),
-				task.getPosition(), task.getCreatedBy().getId(), task.getUpdatedAt(), assignees);
+				task.getPosition(), task.getCreatedBy().getId(), task.getUpdatedAt(), assignees, task.getPriority(),
+				labels);
 	}
 
 	private static void rewrite(List<Task> tasks) {

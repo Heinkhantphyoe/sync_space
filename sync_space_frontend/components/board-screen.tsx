@@ -32,11 +32,10 @@ import {
   renameColumn,
   renameSpace,
   reorderColumns,
-  setTaskAssignees,
   updateTask,
 } from "@/lib/api";
 import { connectBoardSocket } from "@/lib/board-socket";
-import type { Assignee, Board, Column, Member, Task, TaskActivity } from "@/lib/types";
+import type { Assignee, Board, Column, Member, Task, TaskActivity, TaskLabel, TaskPriority } from "@/lib/types";
 
 export function BoardScreen({ spaceId }: { spaceId: string }) {
   const router = useRouter();
@@ -46,6 +45,8 @@ export function BoardScreen({ spaceId }: { spaceId: string }) {
   const [live, setLive] = useState(false);
   const [editing, setEditing] = useState<Task | null>(null);
   const [dragging, setDragging] = useState<Task | null>(null);
+  const [search, setSearch] = useState("");
+  const [priorities, setPriorities] = useState<TaskPriority[]>([]);
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
 
   function applyBoard(next: Board) {
@@ -248,6 +249,22 @@ export function BoardScreen({ spaceId }: { spaceId: string }) {
         ) : null}
       </header>
       {error ? <p className="px-6 pt-3 text-sm text-red-700">{error}</p> : null}
+      <BoardFilters
+        search={search}
+        priorities={priorities}
+        shown={shownCount(board, search, priorities)}
+        total={taskCount(board)}
+        onSearch={setSearch}
+        onTogglePriority={(priority) =>
+          setPriorities((current) =>
+            current.includes(priority) ? current.filter((item) => item !== priority) : [...current, priority],
+          )
+        }
+        onClear={() => {
+          setSearch("");
+          setPriorities([]);
+        }}
+      />
       <DndContext
         sensors={sensors}
         collisionDetection={closestCorners}
@@ -255,10 +272,11 @@ export function BoardScreen({ spaceId }: { spaceId: string }) {
         onDragEnd={onDragEnd}
       >
         <div className="flex flex-1 gap-4 overflow-x-auto px-6 py-5">
-          {board.columns.map((column, index) => (
+          {visibleColumns(board, search, priorities).map((column, index) => (
             <ColumnLane
               key={column.id}
               column={column}
+              filtering={isFiltering(search, priorities)}
               canMoveLeft={index > 0}
               canMoveRight={index < board.columns.length - 1}
               onRename={(name) => run(() => renameColumn(spaceId, column.id, name))}
@@ -275,6 +293,7 @@ export function BoardScreen({ spaceId }: { spaceId: string }) {
               }}
               onCreateTask={(title) => run(() => createTask(spaceId, column.id, title))}
               onOpen={setEditing}
+              draggable={!isFiltering(search, priorities)}
             />
           ))}
           <AddColumn onCreate={(name) => run(() => createColumn(spaceId, name))} />
@@ -282,31 +301,26 @@ export function BoardScreen({ spaceId }: { spaceId: string }) {
         <DragOverlay>
           {dragging ? (
             <article className="w-72 rounded-2xl border border-line bg-paper p-3 shadow-lg">
-              <div className="flex items-start justify-between gap-2">
-                <p className="font-medium">{dragging.title}</p>
-                <AssigneeStack assignees={dragging.assignees} />
-              </div>
+              <TaskBody task={dragging} />
             </article>
           ) : null}
         </DragOverlay>
       </DndContext>
       {openTask ? (
         <TaskEditor
+          key={openTask.id}
           task={openTask}
           members={board.members}
           spaceId={spaceId}
           revision={board.revision}
           onClose={() => setEditing(null)}
-          onSave={async (title, description) => {
-            applyBoard(await updateTask(spaceId, openTask.id, title, description));
+          onSave={async (draft) => {
+            applyBoard(await updateTask(spaceId, openTask.id, draft));
             setEditing(null);
           }}
           onDelete={async () => {
             applyBoard(await deleteTask(spaceId, openTask.id));
             setEditing(null);
-          }}
-          onAssign={async (userIds) => {
-            applyBoard(await setTaskAssignees(spaceId, openTask.id, userIds));
           }}
         />
       ) : null}
@@ -414,6 +428,7 @@ function People({
 
 function ColumnLane({
   column,
+  filtering,
   canMoveLeft,
   canMoveRight,
   onRename,
@@ -421,8 +436,10 @@ function ColumnLane({
   onMove,
   onCreateTask,
   onOpen,
+  draggable,
 }: {
   column: Column;
+  filtering: boolean;
   canMoveLeft: boolean;
   canMoveRight: boolean;
   onRename: (name: string) => void;
@@ -430,6 +447,7 @@ function ColumnLane({
   onMove: (direction: "left" | "right") => void;
   onCreateTask: (title: string) => void;
   onOpen: (task: Task) => void;
+  draggable: boolean;
 }) {
   const [title, setTitle] = useState("");
   const { setNodeRef } = useDroppable({ id: `column:${column.id}` });
@@ -450,8 +468,11 @@ function ColumnLane({
       </div>
       <SortableContext items={column.tasks.map((task) => task.id)} strategy={verticalListSortingStrategy}>
         <div ref={setNodeRef} className="flex min-h-40 flex-1 flex-col gap-2">
+          {column.tasks.length === 0 && filtering ? (
+            <p className="px-1 py-2 text-sm text-muted">No matches</p>
+          ) : null}
           {column.tasks.map((task) => (
-            <TaskCard key={task.id} task={task} onOpen={() => onOpen(task)} />
+            <TaskCard key={task.id} task={task} draggable={draggable} onOpen={() => onOpen(task)} />
           ))}
         </div>
       </SortableContext>
@@ -481,8 +502,11 @@ function ColumnLane({
   );
 }
 
-function TaskCard({ task, onOpen }: { task: Task; onOpen: () => void }) {
-  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: task.id });
+function TaskCard({ task, draggable, onOpen }: { task: Task; draggable: boolean; onOpen: () => void }) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
+    id: task.id,
+    disabled: !draggable,
+  });
   return (
     <article
       ref={setNodeRef}
@@ -490,24 +514,35 @@ function TaskCard({ task, onOpen }: { task: Task; onOpen: () => void }) {
       className={`rounded-2xl border border-line bg-paper p-3 ${isDragging ? "opacity-40" : ""}`}
     >
       <div className="flex items-start gap-2">
-        <button
-          type="button"
-          className="mt-0.5 cursor-grab text-muted active:cursor-grabbing"
-          aria-label="Drag task"
-          {...attributes}
-          {...listeners}
-        >
-          ::
-        </button>
+        {draggable ? (
+          <button
+            type="button"
+            className="mt-0.5 cursor-grab text-muted active:cursor-grabbing"
+            aria-label="Drag task"
+            {...attributes}
+            {...listeners}
+          >
+            ::
+          </button>
+        ) : null}
         <button type="button" onClick={onOpen} className="min-w-0 flex-1 text-left">
-          <div className="flex items-start justify-between gap-2">
-            <p className="font-medium">{task.title}</p>
-            <AssigneeStack assignees={task.assignees} />
-          </div>
-          {task.description ? <p className="mt-1 line-clamp-2 text-sm text-muted">{task.description}</p> : null}
+          <TaskBody task={task} />
         </button>
       </div>
     </article>
+  );
+}
+
+function TaskBody({ task }: { task: Task }) {
+  return (
+    <div className="min-w-0 flex-1">
+      <div className="flex items-start justify-between gap-2">
+        <p className="font-medium">{task.title}</p>
+        <AssigneeStack assignees={task.assignees} />
+      </div>
+      <TaskMeta task={task} />
+      {task.description ? <p className="mt-1 line-clamp-2 text-sm text-muted">{task.description}</p> : null}
+    </div>
   );
 }
 
@@ -544,22 +579,28 @@ function TaskEditor({
   onClose,
   onSave,
   onDelete,
-  onAssign,
 }: {
   task: Task;
   members: Member[];
   spaceId: string;
   revision: number;
   onClose: () => void;
-  onSave: (title: string, description: string) => Promise<void>;
+  onSave: (draft: {
+    title: string;
+    description: string;
+    userIds: string[];
+    labels: TaskLabel[];
+    priority: TaskPriority;
+  }) => Promise<void>;
   onDelete: () => Promise<void>;
-  onAssign: (userIds: string[]) => Promise<void>;
 }) {
   const [title, setTitle] = useState(task.title);
   const [description, setDescription] = useState(task.description ?? "");
+  const [assignees, setAssignees] = useState(task.assignees);
+  const [labels, setLabels] = useState(task.labels);
+  const [priority, setPriority] = useState(task.priority);
   const [error, setError] = useState<string | null>(null);
-  const [assignError, setAssignError] = useState<string | null>(null);
-  const [assigning, setAssigning] = useState(false);
+  const [saving, setSaving] = useState(false);
   const [entries, setEntries] = useState<TaskActivity[] | null>(null);
   const [activityError, setActivityError] = useState<string | null>(null);
   const [comment, setComment] = useState("");
@@ -596,10 +637,22 @@ function TaskEditor({
           <form
             onSubmit={async (event) => {
               event.preventDefault();
+              if (saving) {
+                return;
+              }
+              setSaving(true);
+              setError(null);
               try {
-                await onSave(title.trim(), description);
+                await onSave({
+                  title: title.trim(),
+                  description,
+                  userIds: assignees.map((person) => person.userId),
+                  labels,
+                  priority,
+                });
               } catch (caught) {
                 setError(apiMessage(caught));
+                setSaving(false);
               }
             }}
           >
@@ -621,28 +674,38 @@ function TaskEditor({
               />
             </label>
             {error ? <p className="mt-2 text-sm text-red-700">{error}</p> : null}
+            <LabelPicker
+              labels={labels}
+              disabled={saving}
+              error={null}
+              onToggle={(label) => {
+                setLabels((current) =>
+                  current.includes(label) ? current.filter((item) => item !== label) : [...current, label],
+                );
+              }}
+            />
+            <PriorityPicker
+              priority={priority}
+              disabled={saving}
+              error={null}
+              onSelect={setPriority}
+            />
             <AssigneePicker
               members={members}
-              assignees={task.assignees}
-              disabled={assigning}
-              error={assignError}
-              onToggle={async (userId) => {
-                if (assigning) {
-                  return;
-                }
-                const current = task.assignees.map((person) => person.userId);
-                const next = current.includes(userId)
-                  ? current.filter((id) => id !== userId)
-                  : [...current, userId];
-                setAssigning(true);
-                setAssignError(null);
-                try {
-                  await onAssign(next);
-                } catch (caught) {
-                  setAssignError(apiMessage(caught));
-                } finally {
-                  setAssigning(false);
-                }
+              assignees={assignees}
+              disabled={saving}
+              error={null}
+              onToggle={(userId) => {
+                setAssignees((current) => {
+                  if (current.some((person) => person.userId === userId)) {
+                    return current.filter((person) => person.userId !== userId);
+                  }
+                  const member = members.find((person) => person.userId === userId);
+                  if (!member) {
+                    return current;
+                  }
+                  return [...current, { userId: member.userId, displayName: member.displayName }];
+                });
               }}
             />
             <div className="mt-5 flex items-center justify-between">
@@ -653,8 +716,12 @@ function TaskEditor({
                 <button type="button" onClick={onClose} className="rounded-xl px-3 py-2 text-sm">
                   Cancel
                 </button>
-                <button type="submit" className="rounded-xl bg-accent px-4 py-2 text-sm font-medium text-accent-ink">
-                  Save
+                <button
+                  type="submit"
+                  disabled={saving}
+                  className="rounded-xl bg-accent px-4 py-2 text-sm font-medium text-accent-ink disabled:opacity-50"
+                >
+                  {saving ? "Saving…" : "Save"}
                 </button>
               </div>
             </div>
@@ -751,6 +818,205 @@ function formatActivityTime(iso: string) {
     hour: "numeric",
     minute: "2-digit",
   }).format(date);
+}
+
+const LABEL_META: Record<TaskLabel, { name: string; chip: string }> = {
+  BUG: { name: "Bug", chip: "bg-rose-100 text-rose-900" },
+  FEATURE: { name: "Feature", chip: "bg-teal-100 text-teal-900" },
+  DESIGN: { name: "Design", chip: "bg-violet-100 text-violet-900" },
+};
+
+const PRIORITY_META: Record<TaskPriority, { name: string; chip: string }> = {
+  LOW: { name: "Low", chip: "bg-stone-200 text-stone-800" },
+  MEDIUM: { name: "Medium", chip: "bg-amber-100 text-amber-900" },
+  HIGH: { name: "High", chip: "bg-rose-100 text-rose-900" },
+};
+
+const LABEL_ORDER: TaskLabel[] = ["BUG", "FEATURE", "DESIGN"];
+const PRIORITY_ORDER: TaskPriority[] = ["LOW", "MEDIUM", "HIGH"];
+
+function BoardFilters({
+  search,
+  priorities,
+  shown,
+  total,
+  onSearch,
+  onTogglePriority,
+  onClear,
+}: {
+  search: string;
+  priorities: TaskPriority[];
+  shown: number;
+  total: number;
+  onSearch: (value: string) => void;
+  onTogglePriority: (priority: TaskPriority) => void;
+  onClear: () => void;
+}) {
+  const filtering = isFiltering(search, priorities);
+  return (
+    <div className="flex flex-wrap items-center gap-3 border-b border-line px-6 py-3">
+      <label className="min-w-56 flex-1">
+        <span className="sr-only">Search tasks</span>
+        <input
+          value={search}
+          onChange={(event) => onSearch(event.target.value)}
+          placeholder="Search tasks"
+          className="w-full rounded-xl border border-line bg-paper px-3 py-2 text-sm outline-none focus:border-accent"
+        />
+      </label>
+      <div className="flex items-center gap-2" role="group" aria-label="Filter by priority">
+        {PRIORITY_ORDER.map((priority) => {
+          const selected = priorities.includes(priority);
+          return (
+            <button
+              key={priority}
+              type="button"
+              aria-pressed={selected}
+              onClick={() => onTogglePriority(priority)}
+              className={`rounded-full border px-3 py-1 text-sm ${
+                selected ? `${PRIORITY_META[priority].chip} border-transparent` : "border-line bg-paper text-ink"
+              }`}
+            >
+              {PRIORITY_META[priority].name}
+            </button>
+          );
+        })}
+      </div>
+      {filtering ? (
+        <>
+          <p className="text-sm text-muted">
+            {shown} of {total}
+          </p>
+          <button type="button" onClick={onClear} className="text-sm text-muted">
+            Clear
+          </button>
+        </>
+      ) : null}
+    </div>
+  );
+}
+
+function TaskMeta({ task }: { task: Task }) {
+  return (
+    <div className="mt-2 flex flex-wrap items-center gap-1.5">
+      {task.labels.map((label) => (
+        <span key={label} className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${LABEL_META[label].chip}`}>
+          {LABEL_META[label].name}
+        </span>
+      ))}
+      <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${PRIORITY_META[task.priority].chip}`}>
+        {PRIORITY_META[task.priority].name}
+      </span>
+    </div>
+  );
+}
+
+function LabelPicker({
+  labels,
+  disabled,
+  error,
+  onToggle,
+}: {
+  labels: TaskLabel[];
+  disabled: boolean;
+  error: string | null;
+  onToggle: (label: TaskLabel) => void;
+}) {
+  return (
+    <fieldset className="mt-4" disabled={disabled}>
+      <legend className="text-sm font-medium">Labels</legend>
+      <div className="mt-2 flex flex-wrap gap-2">
+        {LABEL_ORDER.map((label) => {
+          const selected = labels.includes(label);
+          return (
+            <button
+              key={label}
+              type="button"
+              aria-pressed={selected}
+              onClick={() => onToggle(label)}
+              className={`rounded-full border px-2.5 py-1 text-sm font-medium ${
+                selected ? `${LABEL_META[label].chip} border-transparent` : "border-line bg-paper text-ink"
+              }`}
+            >
+              {LABEL_META[label].name}
+            </button>
+          );
+        })}
+      </div>
+      {error ? <p className="mt-2 text-sm text-red-700">{error}</p> : null}
+    </fieldset>
+  );
+}
+
+function PriorityPicker({
+  priority,
+  disabled,
+  error,
+  onSelect,
+}: {
+  priority: TaskPriority;
+  disabled: boolean;
+  error: string | null;
+  onSelect: (priority: TaskPriority) => void;
+}) {
+  return (
+    <fieldset className="mt-4" disabled={disabled}>
+      <legend className="text-sm font-medium">Priority</legend>
+      <div className="mt-2 flex flex-wrap gap-2" role="radiogroup" aria-label="Priority">
+        {PRIORITY_ORDER.map((option) => {
+          const selected = option === priority;
+          return (
+            <button
+              key={option}
+              type="button"
+              role="radio"
+              aria-checked={selected}
+              onClick={() => onSelect(option)}
+              className={`rounded-full border px-2.5 py-1 text-sm font-medium ${
+                selected ? `${PRIORITY_META[option].chip} border-transparent` : "border-line bg-paper text-ink"
+              }`}
+            >
+              {PRIORITY_META[option].name}
+            </button>
+          );
+        })}
+      </div>
+      {error ? <p className="mt-2 text-sm text-red-700">{error}</p> : null}
+    </fieldset>
+  );
+}
+
+function isFiltering(search: string, priorities: TaskPriority[]) {
+  return search.trim().length > 0 || priorities.length > 0;
+}
+
+function taskCount(board: Board) {
+  return board.columns.reduce((sum, column) => sum + column.tasks.length, 0);
+}
+
+function shownCount(board: Board, search: string, priorities: TaskPriority[]) {
+  return visibleColumns(board, search, priorities).reduce((sum, column) => sum + column.tasks.length, 0);
+}
+
+function visibleColumns(board: Board, search: string, priorities: TaskPriority[]) {
+  return board.columns.map((column) => ({
+    ...column,
+    tasks: column.tasks.filter((task) => taskVisible(task, search, priorities)),
+  }));
+}
+
+function taskVisible(task: Task, search: string, priorities: TaskPriority[]) {
+  if (priorities.length > 0 && !priorities.includes(task.priority)) {
+    return false;
+  }
+  const terms = search.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  if (terms.length === 0) {
+    return true;
+  }
+  const haystack = [task.title, task.description ?? "", ...task.labels.map((label) => LABEL_META[label].name)]
+    .join("\n")
+    .toLowerCase();
+  return terms.every((term) => haystack.includes(term));
 }
 
 function findColumn(board: Board, id: string) {

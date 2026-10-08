@@ -69,6 +69,18 @@ public class BoardController {
 		return boardService.assign(spaceId, taskId, CurrentUser.get(), request);
 	}
 
+	@PatchMapping("/tasks/{taskId}/labels")
+	BoardResponse setLabels(@PathVariable UUID spaceId, @PathVariable UUID taskId,
+			@Valid @RequestBody SetTaskLabelsRequest request) {
+		return boardService.setLabels(spaceId, taskId, CurrentUser.get(), request);
+	}
+
+	@PatchMapping("/tasks/{taskId}/priority")
+	BoardResponse setPriority(@PathVariable UUID spaceId, @PathVariable UUID taskId,
+			@Valid @RequestBody SetTaskPriorityRequest request) {
+		return boardService.setPriority(spaceId, taskId, CurrentUser.get(), request);
+	}
+
 	@DeleteMapping("/tasks/{taskId}")
 	BoardResponse deleteTask(@PathVariable UUID spaceId, @PathVariable UUID taskId) {
 		return boardService.deleteTask(spaceId, taskId, CurrentUser.get());
