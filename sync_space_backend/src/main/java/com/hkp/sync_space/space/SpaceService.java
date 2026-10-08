@@ -123,6 +123,9 @@ public class SpaceService {
 		if (target.getRole() == MemberRole.OWNER) {
 			throw new ApiException(HttpStatus.BAD_REQUEST, "The owner cannot be removed");
 		}
+		User actorUser = userRepository.findById(actor.id())
+				.orElseThrow(() -> new ApiException(HttpStatus.UNAUTHORIZED, "Login required"));
+		boardService.clearAssignee(owner.getSpace(), actorUser, userId);
 		memberRepository.delete(target);
 		return touchAndPublish(owner, BoardEvents.MEMBERS_CHANGED);
 	}

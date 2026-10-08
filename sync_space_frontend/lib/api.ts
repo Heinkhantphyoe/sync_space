@@ -138,6 +138,13 @@ export function createTask(spaceId: string, columnId: string, title: string) {
   });
 }
 
+export function setTaskAssignees(spaceId: string, taskId: string, userIds: string[]) {
+  return request<Board>(`/api/spaces/${spaceId}/tasks/${taskId}/assignees`, {
+    method: "PATCH",
+    body: JSON.stringify({ userIds }),
+  });
+}
+
 export function updateTask(
   spaceId: string,
   taskId: string,

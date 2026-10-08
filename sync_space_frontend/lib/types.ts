@@ -18,6 +18,11 @@ export type SpaceSummary = {
   memberCount: number;
 };
 
+export type Assignee = {
+  userId: string;
+  displayName: string;
+};
+
 export type Task = {
   id: string;
   columnId: string;
@@ -26,6 +31,7 @@ export type Task = {
   position: number;
   createdBy: string;
   updatedAt: string;
+  assignees: Assignee[];
 };
 
 export type Column = {
@@ -59,7 +65,14 @@ export type BoardEvent = {
   board: BoardState;
 };
 
-export type TaskActivityKind = "CREATED" | "MOVED" | "RENAMED" | "DESCRIPTION_CHANGED" | "COMMENT";
+export type TaskActivityKind =
+  | "CREATED"
+  | "MOVED"
+  | "RENAMED"
+  | "DESCRIPTION_CHANGED"
+  | "COMMENT"
+  | "ASSIGNED"
+  | "UNASSIGNED";
 
 export type TaskActivity = {
   id: string;

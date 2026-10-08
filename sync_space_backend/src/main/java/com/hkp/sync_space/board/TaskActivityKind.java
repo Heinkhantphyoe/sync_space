@@ -5,5 +5,7 @@ public enum TaskActivityKind {
 	MOVED,
 	RENAMED,
 	DESCRIPTION_CHANGED,
-	COMMENT
+	COMMENT,
+	ASSIGNED,
+	UNASSIGNED
 }

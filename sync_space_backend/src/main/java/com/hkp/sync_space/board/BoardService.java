@@ -4,9 +4,11 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
 
@@ -211,6 +213,71 @@ public class BoardService {
 		return touchAndPublish(member, BoardEvents.TASK_MOVED);
 	}
 
+	@Transactional
+	public BoardResponse assign(UUID spaceId, UUID taskId, AuthUser actor, AssignTaskRequest request) {
+		SpaceMember member = spaceAccess.lockMember(spaceId, actor.id());
+		Task task = task(spaceId, taskId);
+		LinkedHashSet<UUID> requested = new LinkedHashSet<>();
+		for (UUID userId : request.userIds()) {
+			if (userId == null) {
+				throw new ApiException(HttpStatus.BAD_REQUEST, "Only people in this space can be assigned");
+			}
+			requested.add(userId);
+		}
+		Set<UUID> memberIds = memberRepository.findBySpaceId(spaceId).stream()
+				.map(spaceMember -> spaceMember.getUser().getId())
+				.collect(Collectors.toSet());
+		if (!memberIds.containsAll(requested)) {
+			throw new ApiException(HttpStatus.BAD_REQUEST, "Only people in this space can be assigned");
+		}
+		Set<UUID> currentIds = task.getAssignees().stream().map(User::getId).collect(Collectors.toSet());
+		if (currentIds.equals(requested)) {
+			return BoardResponses.from(loadState(spaceId), member.getRole());
+		}
+		Map<UUID, User> usersById = userRepository.findAllById(requested).stream()
+				.collect(Collectors.toMap(User::getId, user -> user));
+		User actorUser = user(actor.id());
+		Instant stamp = Instant.now();
+		List<User> removed = task.getAssignees().stream()
+				.filter(assignee -> !requested.contains(assignee.getId()))
+				.toList();
+		for (User assignee : removed) {
+			task.getAssignees().remove(assignee);
+			record(member.getSpace(), task, actorUser, TaskActivityKind.UNASSIGNED, assignee.getDisplayName(), stamp);
+			stamp = stamp.plusMillis(1);
+		}
+		for (UUID userId : requested) {
+			if (!currentIds.contains(userId)) {
+				User assignee = usersById.get(userId);
+				task.getAssignees().add(assignee);
+				record(member.getSpace(), task, actorUser, TaskActivityKind.ASSIGNED, assignee.getDisplayName(), stamp);
+				stamp = stamp.plusMillis(1);
+			}
+		}
+		task.setUpdatedAt(Instant.now());
+		return touchAndPublish(member, BoardEvents.TASK_UPDATED);
+	}
+
+	@Transactional
+	public void clearAssignee(Space space, User actor, UUID userId) {
+		List<Task> tasks = taskRepository.findAssignedTo(space.getId(), userId);
+		if (tasks.isEmpty()) {
+			return;
+		}
+		String name = tasks.getFirst().getAssignees().stream()
+				.filter(assignee -> assignee.getId().equals(userId))
+				.map(User::getDisplayName)
+				.findFirst()
+				.orElse("someone");
+		Instant stamp = Instant.now();
+		for (Task task : tasks) {
+			task.getAssignees().removeIf(assignee -> assignee.getId().equals(userId));
+			task.setUpdatedAt(stamp);
+			record(space, task, actor, TaskActivityKind.UNASSIGNED, name, stamp);
+			stamp = stamp.plusMillis(1);
+		}
+	}
+
 	public List<TaskActivityResponse> activity(UUID spaceId, UUID taskId, AuthUser actor) {
 		spaceAccess.requireMember(spaceId, actor.id());
 		task(spaceId, taskId);
@@ -264,6 +331,8 @@ public class BoardService {
 			case RENAMED -> "renamed this to " + entry.getBody();
 			case DESCRIPTION_CHANGED -> "updated the description";
 			case COMMENT -> null;
+			case ASSIGNED -> "assigned " + entry.getBody();
+			case UNASSIGNED -> "unassigned " + entry.getBody();
 		};
 		String body = entry.getKind() == TaskActivityKind.COMMENT ? entry.getBody() : null;
 		return new TaskActivityResponse(entry.getId(), entry.getKind().name(), entry.getActor().getId(),
@@ -271,8 +340,12 @@ public class BoardService {
 	}
 
 	private TaskResponse toTask(Task task) {
+		List<AssigneeResponse> assignees = task.getAssignees().stream()
+				.sorted(Comparator.comparing(User::getDisplayName, String.CASE_INSENSITIVE_ORDER))
+				.map(assignee -> new AssigneeResponse(assignee.getId(), assignee.getDisplayName()))
+				.toList();
 		return new TaskResponse(task.getId(), task.getColumn().getId(), task.getTitle(), task.getDescription(),
-				task.getPosition(), task.getCreatedBy().getId(), task.getUpdatedAt());
+				task.getPosition(), task.getCreatedBy().getId(), task.getUpdatedAt(), assignees);
 	}
 
 	private static void rewrite(List<Task> tasks) {

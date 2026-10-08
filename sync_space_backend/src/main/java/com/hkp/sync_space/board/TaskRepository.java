@@ -11,8 +11,21 @@ import org.springframework.data.repository.query.Param;
 
 public interface TaskRepository extends JpaRepository<Task, UUID> {
 
-	@Query("select t from Task t join fetch t.column where t.space.id = :spaceId order by t.position asc")
+	@Query("""
+			select distinct t from Task t
+			join fetch t.column
+			left join fetch t.assignees
+			where t.space.id = :spaceId
+			order by t.position asc
+			""")
 	List<Task> findBySpaceId(@Param("spaceId") UUID spaceId);
+
+	@Query("""
+			select t from Task t
+			where t.space.id = :spaceId
+			and exists (select assignee from t.assignees assignee where assignee.id = :userId)
+			""")
+	List<Task> findAssignedTo(@Param("spaceId") UUID spaceId, @Param("userId") UUID userId);
 
 	List<Task> findByColumnIdOrderByPositionAsc(UUID columnId);
 

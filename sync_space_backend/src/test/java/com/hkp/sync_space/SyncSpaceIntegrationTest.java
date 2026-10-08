@@ -212,12 +212,135 @@ class SyncSpaceIntegrationTest {
 				.andExpect(status().isForbidden());
 	}
 
+	@Test
+	void taskAssignees() throws Exception {
+		register("ada.assignees@example.com", "Ada");
+		register("grace.assignees@example.com", "Grace");
+		register("outsider.assignees@example.com", "Outsider");
+		String ada = login("ada.assignees@example.com");
+		String grace = login("grace.assignees@example.com");
+		String outsider = login("outsider.assignees@example.com");
+		String adaId = userId(ada);
+		String graceId = userId(grace);
+		String outsiderId = userId(outsider);
+
+		MvcResult created = mvc.perform(post("/api/spaces")
+						.header("Authorization", "Bearer " + ada)
+						.contentType(MediaType.APPLICATION_JSON)
+						.content("{\"name\":\"Assignees\"}"))
+				.andExpect(status().isCreated())
+				.andReturn();
+		String spaceId = JsonPath.read(created.getResponse().getContentAsString(), "$.id");
+		mvc.perform(post("/api/spaces/" + spaceId + "/members")
+						.header("Authorization", "Bearer " + ada)
+						.contentType(MediaType.APPLICATION_JSON)
+						.content("{\"email\":\"grace.assignees@example.com\"}"))
+				.andExpect(status().isOk());
+
+		String board = mvc.perform(get("/api/spaces/" + spaceId + "/board").header("Authorization", "Bearer " + ada))
+				.andExpect(status().isOk())
+				.andReturn()
+				.getResponse()
+				.getContentAsString();
+		String todoId = JsonPath.read(board, "$.columns[0].id");
+		String withTask = mvc.perform(post("/api/spaces/" + spaceId + "/tasks")
+						.header("Authorization", "Bearer " + ada)
+						.contentType(MediaType.APPLICATION_JSON)
+						.content("{\"columnId\":\"" + todoId + "\",\"title\":\"Write spec\"}"))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.columns[0].tasks[0].assignees.length()").value(0))
+				.andReturn()
+				.getResponse()
+				.getContentAsString();
+		String taskId = JsonPath.read(withTask, "$.columns[0].tasks[0].id");
+
+		mvc.perform(patch("/api/spaces/" + spaceId + "/tasks/" + taskId + "/assignees")
+						.header("Authorization", "Bearer " + grace)
+						.contentType(MediaType.APPLICATION_JSON)
+						.content("{\"userIds\":[\"" + graceId + "\",\"" + adaId + "\",\"" + adaId + "\"]}"))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.columns[0].tasks[0].assignees.length()").value(2))
+				.andExpect(jsonPath("$.columns[0].tasks[0].assignees[0].displayName").value("Ada"))
+				.andExpect(jsonPath("$.columns[0].tasks[0].assignees[0].userId").value(adaId))
+				.andExpect(jsonPath("$.columns[0].tasks[0].assignees[1].displayName").value("Grace"));
+
+		mvc.perform(patch("/api/spaces/" + spaceId + "/tasks/" + taskId + "/assignees")
+						.header("Authorization", "Bearer " + ada)
+						.contentType(MediaType.APPLICATION_JSON)
+						.content("{\"userIds\":[\"" + adaId + "\",\"" + graceId + "\"]}"))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.columns[0].tasks[0].assignees.length()").value(2));
+
+		mvc.perform(patch("/api/spaces/" + spaceId + "/tasks/" + taskId + "/assignees")
+						.header("Authorization", "Bearer " + ada)
+						.contentType(MediaType.APPLICATION_JSON)
+						.content("{\"userIds\":[\"" + outsiderId + "\"]}"))
+				.andExpect(status().isBadRequest())
+				.andExpect(jsonPath("$.message").value("Only people in this space can be assigned"));
+
+		mvc.perform(patch("/api/spaces/" + spaceId + "/tasks/" + taskId + "/assignees")
+						.header("Authorization", "Bearer " + outsider)
+						.contentType(MediaType.APPLICATION_JSON)
+						.content("{\"userIds\":[\"" + adaId + "\"]}"))
+				.andExpect(status().isForbidden());
+
+		mvc.perform(patch("/api/spaces/" + spaceId + "/tasks/" + taskId + "/assignees")
+						.header("Authorization", "Bearer " + ada)
+						.contentType(MediaType.APPLICATION_JSON)
+						.content("{\"userIds\":[\"" + adaId + "\"]}"))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.columns[0].tasks[0].assignees.length()").value(1))
+				.andExpect(jsonPath("$.columns[0].tasks[0].assignees[0].displayName").value("Ada"));
+
+		mvc.perform(get("/api/spaces/" + spaceId + "/tasks/" + taskId + "/activity")
+						.header("Authorization", "Bearer " + grace))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$[?(@.kind == 'ASSIGNED')].summary", hasItem("assigned Ada")))
+				.andExpect(jsonPath("$[?(@.kind == 'ASSIGNED')].summary", hasItem("assigned Grace")))
+				.andExpect(jsonPath("$[?(@.kind == 'UNASSIGNED')].summary", hasItem("unassigned Grace")));
+
+		mvc.perform(delete("/api/spaces/" + spaceId + "/members/" + graceId).header("Authorization", "Bearer " + ada))
+				.andExpect(status().isOk());
+		mvc.perform(patch("/api/spaces/" + spaceId + "/tasks/" + taskId + "/assignees")
+						.header("Authorization", "Bearer " + ada)
+						.contentType(MediaType.APPLICATION_JSON)
+						.content("{\"userIds\":[\"" + graceId + "\"]}"))
+				.andExpect(status().isBadRequest())
+				.andExpect(jsonPath("$.message").value("Only people in this space can be assigned"));
+
+		mvc.perform(post("/api/spaces/" + spaceId + "/members")
+						.header("Authorization", "Bearer " + ada)
+						.contentType(MediaType.APPLICATION_JSON)
+						.content("{\"email\":\"grace.assignees@example.com\"}"))
+				.andExpect(status().isOk());
+		mvc.perform(patch("/api/spaces/" + spaceId + "/tasks/" + taskId + "/assignees")
+						.header("Authorization", "Bearer " + ada)
+						.contentType(MediaType.APPLICATION_JSON)
+						.content("{\"userIds\":[\"" + adaId + "\",\"" + graceId + "\"]}"))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.columns[0].tasks[0].assignees.length()").value(2));
+		mvc.perform(delete("/api/spaces/" + spaceId + "/members/" + graceId).header("Authorization", "Bearer " + ada))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.columns[0].tasks[0].assignees.length()").value(1))
+				.andExpect(jsonPath("$.columns[0].tasks[0].assignees[0].displayName").value("Ada"));
+		mvc.perform(get("/api/spaces/" + spaceId + "/tasks/" + taskId + "/activity")
+						.header("Authorization", "Bearer " + ada))
+				.andExpect(jsonPath("$[?(@.kind == 'UNASSIGNED')].summary", hasItem("unassigned Grace")));
+	}
+
 	private void register(String email, String name) throws Exception {
 		mvc.perform(post("/api/auth/register")
 						.contentType(MediaType.APPLICATION_JSON)
 						.content("{\"email\":\"" + email + "\",\"password\":\"password1\",\"displayName\":\"" + name + "\"}"))
 				.andExpect(status().isOk())
 				.andExpect(jsonPath("$.token").isNotEmpty());
+	}
+
+	private String userId(String token) throws Exception {
+		MvcResult result = mvc.perform(get("/api/auth/me").header("Authorization", "Bearer " + token))
+				.andExpect(status().isOk())
+				.andReturn();
+		return JsonPath.read(result.getResponse().getContentAsString(), "$.id");
 	}
 
 	private String login(String email) throws Exception {

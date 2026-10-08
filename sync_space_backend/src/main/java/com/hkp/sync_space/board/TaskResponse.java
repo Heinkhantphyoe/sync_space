@@ -11,5 +11,6 @@ public record TaskResponse(
 		String description,
 		int position,
 		UUID createdBy,
-		Instant updatedAt) {
+		Instant updatedAt,
+		List<AssigneeResponse> assignees) {
 }

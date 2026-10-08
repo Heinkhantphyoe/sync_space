@@ -63,6 +63,12 @@ public class BoardController {
 		return boardService.updateTask(spaceId, taskId, CurrentUser.get(), request);
 	}
 
+	@PatchMapping("/tasks/{taskId}/assignees")
+	BoardResponse assign(@PathVariable UUID spaceId, @PathVariable UUID taskId,
+			@Valid @RequestBody AssignTaskRequest request) {
+		return boardService.assign(spaceId, taskId, CurrentUser.get(), request);
+	}
+
 	@DeleteMapping("/tasks/{taskId}")
 	BoardResponse deleteTask(@PathVariable UUID spaceId, @PathVariable UUID taskId) {
 		return boardService.deleteTask(spaceId, taskId, CurrentUser.get());

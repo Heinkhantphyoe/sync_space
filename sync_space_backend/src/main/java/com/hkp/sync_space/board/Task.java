@@ -1,6 +1,8 @@
 package com.hkp.sync_space.board;
 
 import java.time.Instant;
+import java.util.LinkedHashSet;
+import java.util.Set;
 import java.util.UUID;
 
 import jakarta.persistence.Column;
@@ -8,6 +10,8 @@ import jakarta.persistence.Entity;
 import jakarta.persistence.FetchType;
 import jakarta.persistence.Id;
 import jakarta.persistence.JoinColumn;
+import jakarta.persistence.JoinTable;
+import jakarta.persistence.ManyToMany;
 import jakarta.persistence.ManyToOne;
 import jakarta.persistence.Table;
 
@@ -49,6 +53,10 @@ public class Task {
 	@JoinColumn(name = "created_by", nullable = false)
 	private User createdBy;
 
+	@ManyToMany
+	@JoinTable(name = "task_assignees", joinColumns = @JoinColumn(name = "task_id"), inverseJoinColumns = @JoinColumn(name = "user_id"))
+	private Set<User> assignees = new LinkedHashSet<>();
+
 	@Column(name = "created_at", nullable = false, columnDefinition = "timestamptz")
 	private Instant createdAt;
 
@@ -63,6 +71,7 @@ public class Task {
 		this.description = description;
 		this.position = position;
 		this.createdBy = createdBy;
+		this.assignees = new LinkedHashSet<>();
 		Instant now = Instant.now();
 		this.createdAt = now;
 		this.updatedAt = now;

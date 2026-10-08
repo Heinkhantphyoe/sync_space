@@ -32,10 +32,11 @@ import {
   renameColumn,
   renameSpace,
   reorderColumns,
+  setTaskAssignees,
   updateTask,
 } from "@/lib/api";
 import { connectBoardSocket } from "@/lib/board-socket";
-import type { Board, Column, Task, TaskActivity } from "@/lib/types";
+import type { Assignee, Board, Column, Member, Task, TaskActivity } from "@/lib/types";
 
 export function BoardScreen({ spaceId }: { spaceId: string }) {
   const router = useRouter();
@@ -180,6 +181,10 @@ export function BoardScreen({ spaceId }: { spaceId: string }) {
   if (!board && !error) {
     return <p className="p-8 text-muted">Loading board…</p>;
   }
+  const openTask = editing
+    ? board?.columns.flatMap((column) => column.tasks).find((task) => task.id === editing.id)
+    : undefined;
+
   if (!board) {
     return (
       <div className="p-8">
@@ -277,24 +282,31 @@ export function BoardScreen({ spaceId }: { spaceId: string }) {
         <DragOverlay>
           {dragging ? (
             <article className="w-72 rounded-2xl border border-line bg-paper p-3 shadow-lg">
-              <p className="font-medium">{dragging.title}</p>
+              <div className="flex items-start justify-between gap-2">
+                <p className="font-medium">{dragging.title}</p>
+                <AssigneeStack assignees={dragging.assignees} />
+              </div>
             </article>
           ) : null}
         </DragOverlay>
       </DndContext>
-      {editing ? (
+      {openTask ? (
         <TaskEditor
-          task={editing}
+          task={openTask}
+          members={board.members}
           spaceId={spaceId}
           revision={board.revision}
           onClose={() => setEditing(null)}
           onSave={async (title, description) => {
-            applyBoard(await updateTask(spaceId, editing.id, title, description));
+            applyBoard(await updateTask(spaceId, openTask.id, title, description));
             setEditing(null);
           }}
           onDelete={async () => {
-            applyBoard(await deleteTask(spaceId, editing.id));
+            applyBoard(await deleteTask(spaceId, openTask.id));
             setEditing(null);
+          }}
+          onAssign={async (userIds) => {
+            applyBoard(await setTaskAssignees(spaceId, openTask.id, userIds));
           }}
         />
       ) : null}
@@ -368,13 +380,7 @@ function People({
         className="flex items-center gap-1 rounded-full border border-line bg-paper px-2 py-1"
       >
         {board.members.slice(0, 4).map((member) => (
-          <span
-            key={member.userId}
-            title={member.displayName}
-            className="inline-flex h-7 w-7 items-center justify-center rounded-full bg-column text-xs font-semibold"
-          >
-            {initials(member.displayName)}
-          </span>
+          <Avatar key={member.userId} userId={member.userId} name={member.displayName} size="md" />
         ))}
       </button>
       {open ? (
@@ -383,9 +389,12 @@ function People({
           <ul className="mt-3 space-y-2">
             {board.members.map((member) => (
               <li key={member.userId} className="flex items-center justify-between gap-2 text-sm">
-                <span>
-                  <span className="font-medium">{member.displayName}</span>
-                  <span className="block text-xs text-muted">{member.email}</span>
+                <span className="flex min-w-0 items-center gap-2">
+                  <Avatar userId={member.userId} name={member.displayName} size="md" />
+                  <span className="min-w-0">
+                    <span className="block font-medium">{member.displayName}</span>
+                    <span className="block truncate text-xs text-muted">{member.email}</span>
+                  </span>
                 </span>
                 {board.role === "OWNER" && member.userId !== currentUserId ? (
                   <button type="button" className="text-xs text-red-700" onClick={() => onRemove(member.userId)}>
@@ -491,7 +500,10 @@ function TaskCard({ task, onOpen }: { task: Task; onOpen: () => void }) {
           ::
         </button>
         <button type="button" onClick={onOpen} className="min-w-0 flex-1 text-left">
-          <p className="font-medium">{task.title}</p>
+          <div className="flex items-start justify-between gap-2">
+            <p className="font-medium">{task.title}</p>
+            <AssigneeStack assignees={task.assignees} />
+          </div>
           {task.description ? <p className="mt-1 line-clamp-2 text-sm text-muted">{task.description}</p> : null}
         </button>
       </div>
@@ -526,22 +538,28 @@ function AddColumn({ onCreate }: { onCreate: (name: string) => void }) {
 
 function TaskEditor({
   task,
+  members,
   spaceId,
   revision,
   onClose,
   onSave,
   onDelete,
+  onAssign,
 }: {
   task: Task;
+  members: Member[];
   spaceId: string;
   revision: number;
   onClose: () => void;
   onSave: (title: string, description: string) => Promise<void>;
   onDelete: () => Promise<void>;
+  onAssign: (userIds: string[]) => Promise<void>;
 }) {
   const [title, setTitle] = useState(task.title);
   const [description, setDescription] = useState(task.description ?? "");
   const [error, setError] = useState<string | null>(null);
+  const [assignError, setAssignError] = useState<string | null>(null);
+  const [assigning, setAssigning] = useState(false);
   const [entries, setEntries] = useState<TaskActivity[] | null>(null);
   const [activityError, setActivityError] = useState<string | null>(null);
   const [comment, setComment] = useState("");
@@ -603,6 +621,30 @@ function TaskEditor({
               />
             </label>
             {error ? <p className="mt-2 text-sm text-red-700">{error}</p> : null}
+            <AssigneePicker
+              members={members}
+              assignees={task.assignees}
+              disabled={assigning}
+              error={assignError}
+              onToggle={async (userId) => {
+                if (assigning) {
+                  return;
+                }
+                const current = task.assignees.map((person) => person.userId);
+                const next = current.includes(userId)
+                  ? current.filter((id) => id !== userId)
+                  : [...current, userId];
+                setAssigning(true);
+                setAssignError(null);
+                try {
+                  await onAssign(next);
+                } catch (caught) {
+                  setAssignError(apiMessage(caught));
+                } finally {
+                  setAssigning(false);
+                }
+              }}
+            />
             <div className="mt-5 flex items-center justify-between">
               <button type="button" className="text-sm text-red-700" onClick={() => void onDelete()}>
                 Delete task
@@ -627,9 +669,7 @@ function TaskEditor({
                 entry.kind === "COMMENT" ? (
                   <article key={entry.id} className="rounded-2xl bg-column px-3 py-2">
                     <div className="flex items-center gap-2">
-                      <span className="flex h-6 w-6 items-center justify-center rounded-full bg-accent text-[10px] font-medium text-accent-ink">
-                        {initials(entry.actorName)}
-                      </span>
+                      <Avatar userId={entry.actorId} name={entry.actorName} />
                       <p className="text-sm font-medium">{entry.actorName}</p>
                       <time className="ml-auto text-xs text-muted" dateTime={entry.createdAt}>
                         {formatActivityTime(entry.createdAt)}
@@ -744,6 +784,111 @@ function moveLocal(board: Board, taskId: string, toColumnId: string, toIndex: nu
       tasks: column.tasks.map((item, position) => ({ ...item, position })),
     })),
   };
+}
+
+function AssigneePicker({
+  members,
+  assignees,
+  disabled,
+  error,
+  onToggle,
+}: {
+  members: Member[];
+  assignees: Assignee[];
+  disabled: boolean;
+  error: string | null;
+  onToggle: (userId: string) => void;
+}) {
+  return (
+    <fieldset className="mt-4" disabled={disabled}>
+      <legend className="text-sm font-medium">Assignees(click to assign)</legend>
+      <ul className="mt-2 flex flex-wrap gap-2">
+        {members.map((member) => {
+          const selected = assignees.some((person) => person.userId === member.userId);
+          return (
+            <li key={member.userId}>
+              <button
+                type="button"
+                aria-pressed={selected}
+                onClick={() => onToggle(member.userId)}
+                className={`flex items-center gap-2 rounded-full border px-2 py-1 text-sm ${
+                  selected ? "border-accent bg-teal-50" : "border-line bg-paper"
+                }`}
+              >
+                <Avatar userId={member.userId} name={member.displayName} />
+                {member.displayName}
+              </button>
+            </li>
+          );
+        })}
+      </ul>
+      {error ? <p className="mt-2 text-sm text-red-700">{error}</p> : null}
+    </fieldset>
+  );
+}
+
+function AssigneeStack({ assignees }: { assignees: Assignee[] }) {
+  if (assignees.length === 0) {
+    return null;
+  }
+  const visible = assignees.slice(0, 3);
+  const extra = assignees.length - visible.length;
+  const names = assignees.map((person) => person.displayName).join(", ");
+  return (
+    <span className="flex shrink-0 items-center" title={names} aria-label={`Assigned to ${names}`}>
+      {visible.map((person, index) => (
+        <Avatar
+          key={person.userId}
+          userId={person.userId}
+          name={person.displayName}
+          className={index === 0 ? "" : "-ml-1.5"}
+        />
+      ))}
+      {extra > 0 ? (
+        <span className="-ml-1.5 inline-flex h-6 min-w-6 items-center justify-center rounded-full bg-column px-1 text-[10px] font-semibold ring-2 ring-paper">
+          +{extra}
+        </span>
+      ) : null}
+    </span>
+  );
+}
+
+function Avatar({
+  userId,
+  name,
+  size = "sm",
+  className = "",
+}: {
+  userId: string;
+  name: string;
+  size?: "sm" | "md";
+  className?: string;
+}) {
+  const box = size === "sm" ? "h-6 w-6 text-[10px]" : "h-7 w-7 text-xs";
+  return (
+    <span
+      title={name}
+      className={`inline-flex shrink-0 items-center justify-center rounded-full font-semibold ring-2 ring-paper ${box} ${avatarTone(userId)} ${className}`}
+    >
+      {initials(name)}
+    </span>
+  );
+}
+
+function avatarTone(userId: string) {
+  const tones = [
+    "bg-teal-800 text-teal-50",
+    "bg-amber-800 text-amber-50",
+    "bg-rose-800 text-rose-50",
+    "bg-sky-800 text-sky-50",
+    "bg-violet-800 text-violet-50",
+    "bg-stone-600 text-stone-50",
+  ];
+  let hash = 0;
+  for (const char of userId) {
+    hash = (hash * 31 + char.charCodeAt(0)) >>> 0;
+  }
+  return tones[hash % tones.length];
 }
 
 function initials(name: string) {
