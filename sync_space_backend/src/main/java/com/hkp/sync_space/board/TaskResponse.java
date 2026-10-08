@@ -12,5 +12,7 @@ public record TaskResponse(
 		int position,
 		UUID createdBy,
 		Instant updatedAt,
-		List<AssigneeResponse> assignees) {
+		List<AssigneeResponse> assignees,
+		TaskPriority priority,
+		List<TaskLabel> labels) {
 }

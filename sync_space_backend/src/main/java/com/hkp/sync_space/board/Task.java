@@ -5,8 +5,12 @@ import java.util.LinkedHashSet;
 import java.util.Set;
 import java.util.UUID;
 
+import jakarta.persistence.CollectionTable;
 import jakarta.persistence.Column;
+import jakarta.persistence.ElementCollection;
 import jakarta.persistence.Entity;
+import jakarta.persistence.EnumType;
+import jakarta.persistence.Enumerated;
 import jakarta.persistence.FetchType;
 import jakarta.persistence.Id;
 import jakarta.persistence.JoinColumn;
@@ -57,6 +61,16 @@ public class Task {
 	@JoinTable(name = "task_assignees", joinColumns = @JoinColumn(name = "task_id"), inverseJoinColumns = @JoinColumn(name = "user_id"))
 	private Set<User> assignees = new LinkedHashSet<>();
 
+	@Enumerated(EnumType.STRING)
+	@Column(nullable = false, length = 20)
+	private TaskPriority priority;
+
+	@ElementCollection
+	@CollectionTable(name = "task_labels", joinColumns = @JoinColumn(name = "task_id"))
+	@Enumerated(EnumType.STRING)
+	@Column(name = "label", nullable = false, length = 20)
+	private Set<TaskLabel> labels = new LinkedHashSet<>();
+
 	@Column(name = "created_at", nullable = false, columnDefinition = "timestamptz")
 	private Instant createdAt;
 
@@ -72,6 +86,8 @@ public class Task {
 		this.position = position;
 		this.createdBy = createdBy;
 		this.assignees = new LinkedHashSet<>();
+		this.priority = TaskPriority.MEDIUM;
+		this.labels = new LinkedHashSet<>();
 		Instant now = Instant.now();
 		this.createdAt = now;
 		this.updatedAt = now;

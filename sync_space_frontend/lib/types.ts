@@ -23,6 +23,10 @@ export type Assignee = {
   displayName: string;
 };
 
+export type TaskLabel = "BUG" | "FEATURE" | "DESIGN";
+
+export type TaskPriority = "LOW" | "MEDIUM" | "HIGH";
+
 export type Task = {
   id: string;
   columnId: string;
@@ -32,6 +36,8 @@ export type Task = {
   createdBy: string;
   updatedAt: string;
   assignees: Assignee[];
+  priority: TaskPriority;
+  labels: TaskLabel[];
 };
 
 export type Column = {
@@ -72,7 +78,10 @@ export type TaskActivityKind =
   | "DESCRIPTION_CHANGED"
   | "COMMENT"
   | "ASSIGNED"
-  | "UNASSIGNED";
+  | "UNASSIGNED"
+  | "LABELED"
+  | "UNLABELED"
+  | "PRIORITY_CHANGED";
 
 export type TaskActivity = {
   id: string;

@@ -15,6 +15,7 @@ public interface TaskRepository extends JpaRepository<Task, UUID> {
 			select distinct t from Task t
 			join fetch t.column
 			left join fetch t.assignees
+			left join fetch t.labels
 			where t.space.id = :spaceId
 			order by t.position asc
 			""")

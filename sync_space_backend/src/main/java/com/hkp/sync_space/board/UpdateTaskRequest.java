@@ -1,8 +1,14 @@
 package com.hkp.sync_space.board;
 
+import java.util.List;
+import java.util.UUID;
+
 import jakarta.validation.constraints.Size;
 
 public record UpdateTaskRequest(
 		@Size(max = 200, message = "Title must be 200 characters or fewer") String title,
-		@Size(max = 4000, message = "Description must be 4000 characters or fewer") String description) {
+		@Size(max = 4000, message = "Description must be 4000 characters or fewer") String description,
+		List<UUID> userIds,
+		List<TaskLabel> labels,
+		TaskPriority priority) {
 }

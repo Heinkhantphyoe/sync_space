@@ -1,5 +1,13 @@
 import { clearSession, getToken } from "@/lib/auth";
-import type { AuthResponse, Board, SpaceSummary, TaskActivity, User } from "@/lib/types";
+import type {
+  AuthResponse,
+  Board,
+  SpaceSummary,
+  TaskActivity,
+  TaskLabel,
+  TaskPriority,
+  User,
+} from "@/lib/types";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8080";
 
@@ -145,15 +153,34 @@ export function setTaskAssignees(spaceId: string, taskId: string, userIds: strin
   });
 }
 
+export function setTaskLabels(spaceId: string, taskId: string, labels: TaskLabel[]) {
+  return request<Board>(`/api/spaces/${spaceId}/tasks/${taskId}/labels`, {
+    method: "PATCH",
+    body: JSON.stringify({ labels }),
+  });
+}
+
+export function setTaskPriority(spaceId: string, taskId: string, priority: TaskPriority) {
+  return request<Board>(`/api/spaces/${spaceId}/tasks/${taskId}/priority`, {
+    method: "PATCH",
+    body: JSON.stringify({ priority }),
+  });
+}
+
 export function updateTask(
   spaceId: string,
   taskId: string,
-  title: string,
-  description: string,
+  draft: {
+    title: string;
+    description: string;
+    userIds: string[];
+    labels: TaskLabel[];
+    priority: TaskPriority;
+  },
 ) {
   return request<Board>(`/api/spaces/${spaceId}/tasks/${taskId}`, {
     method: "PATCH",
-    body: JSON.stringify({ title, description }),
+    body: JSON.stringify(draft),
   });
 }
 
