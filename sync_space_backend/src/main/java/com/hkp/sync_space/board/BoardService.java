@@ -187,6 +187,45 @@ public class BoardService {
 	}
 
 	@Transactional
+	public BoardResponse archiveTask(UUID spaceId, UUID taskId, AuthUser actor) {
+		SpaceMember member = spaceAccess.lockMember(spaceId, actor.id());
+		Task task = task(spaceId, taskId);
+		if (!task.isArchived()) {
+			task.setArchived(true);
+			rewrite(visibleInColumn(task.getColumn().getId(), taskId));
+			record(member.getSpace(), task, user(actor.id()), TaskActivityKind.ARCHIVED, null, Instant.now());
+			task.setUpdatedAt(Instant.now());
+			return touchAndPublish(member, BoardEvents.TASK_UPDATED);
+		}
+		return BoardResponses.from(loadState(spaceId), member.getRole());
+	}
+
+	@Transactional
+	public BoardResponse restoreTask(UUID spaceId, UUID taskId, AuthUser actor) {
+		SpaceMember member = spaceAccess.lockMember(spaceId, actor.id());
+		Task task = task(spaceId, taskId);
+		if (!task.isArchived()) {
+			return BoardResponses.from(loadState(spaceId), member.getRole());
+		}
+		task.setArchived(false);
+		List<Task> visible = new ArrayList<>(visibleInColumn(task.getColumn().getId(), task.getId()));
+		visible.add(task);
+		rewrite(visible);
+		record(member.getSpace(), task, user(actor.id()), TaskActivityKind.RESTORED, null, Instant.now());
+		task.setUpdatedAt(Instant.now());
+		return touchAndPublish(member, BoardEvents.TASK_UPDATED);
+	}
+
+	public List<TaskResponse> archived(UUID spaceId, AuthUser actor) {
+		spaceAccess.requireMember(spaceId, actor.id());
+		Map<UUID, List<TaskCheck>> checksByTask = checkRepository.findBySpaceId(spaceId).stream()
+				.collect(Collectors.groupingBy(item -> item.getTask().getId()));
+		return taskRepository.findArchivedBySpaceId(spaceId).stream()
+				.map(task -> toTask(task, checksByTask.getOrDefault(task.getId(), List.of())))
+				.toList();
+	}
+
+	@Transactional
 	public BoardResponse deleteTask(UUID spaceId, UUID taskId, AuthUser actor) {
 		SpaceMember member = spaceAccess.lockMember(spaceId, actor.id());
 		Task task = task(spaceId, taskId);
@@ -563,6 +602,8 @@ public class BoardService {
 			case CHECK_COMPLETED -> "checked " + entry.getBody();
 			case CHECK_REOPENED -> "unchecked " + entry.getBody();
 			case CHECK_REMOVED -> "removed checklist item " + entry.getBody();
+			case ARCHIVED -> "archived this task";
+			case RESTORED -> "restored this task";
 		};
 		String body = entry.getKind() == TaskActivityKind.COMMENT ? entry.getBody() : null;
 		return new TaskActivityResponse(entry.getId(), entry.getKind().name(), entry.getActor().getId(),
@@ -584,6 +625,12 @@ public class BoardService {
 		return new TaskResponse(task.getId(), task.getColumn().getId(), task.getTitle(), task.getDescription(),
 				task.getPosition(), task.getCreatedBy().getId(), task.getUpdatedAt(), assignees, task.getPriority(),
 				labels, task.getDueOn(), checkItems);
+	}
+
+	private List<Task> visibleInColumn(UUID columnId, UUID exceptTaskId) {
+		return taskRepository.findByColumnIdOrderByPositionAsc(columnId).stream()
+				.filter(existing -> !existing.isArchived() && !existing.getId().equals(exceptTaskId))
+				.toList();
 	}
 
 	private static void rewrite(List<Task> tasks) {

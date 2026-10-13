@@ -17,6 +17,7 @@ public interface TaskRepository extends JpaRepository<Task, UUID> {
 			left join fetch t.assignees
 			left join fetch t.labels
 			where t.space.id = :spaceId
+			and t.archived = false
 			order by t.position asc
 			""")
 	List<Task> findBySpaceId(@Param("spaceId") UUID spaceId);
@@ -33,12 +34,24 @@ public interface TaskRepository extends JpaRepository<Task, UUID> {
 			join fetch t.space
 			join fetch t.column
 			where exists (select assignee from t.assignees assignee where assignee.id = :userId)
+			and t.archived = false
 			and exists (
 				select membership from SpaceMember membership
 				where membership.space = t.space and membership.user.id = :userId
 			)
 			""")
 	List<Task> findAssignedToUser(@Param("userId") UUID userId);
+
+	@Query("""
+			select distinct t from Task t
+			join fetch t.column
+			left join fetch t.assignees
+			left join fetch t.labels
+			where t.space.id = :spaceId
+			and t.archived = true
+			order by t.updatedAt desc
+			""")
+	List<Task> findArchivedBySpaceId(@Param("spaceId") UUID spaceId);
 
 	List<Task> findByColumnIdOrderByPositionAsc(UUID columnId);
 

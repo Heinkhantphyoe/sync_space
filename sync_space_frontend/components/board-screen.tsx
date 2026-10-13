@@ -20,6 +20,7 @@ import { useShell } from "@/components/app-shell";
 import {
   addTaskComment,
   apiMessage,
+  archiveTask,
   createCheck,
   createColumn,
   createTask,
@@ -29,9 +30,11 @@ import {
   deleteTask,
   getBoard,
   getTaskActivity,
+  listArchivedTasks,
   moveTask,
   removeMember,
   renameColumn,
+  restoreTask,
   renameSpace,
   reorderColumns,
   updateCheck,
@@ -53,6 +56,7 @@ export function BoardScreen({ spaceId, initialTaskId }: { spaceId: string; initi
   const [overdueOnly, setOverdueOnly] = useState(false);
   const [assignees, setAssignees] = useState<string[]>([]);
   const [labels, setLabels] = useState<TaskLabel[]>([]);
+  const [archiveOpen, setArchiveOpen] = useState(false);
   const query: BoardQuery = { search, priorities, overdueOnly, assignees, labels };
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
   const openedInitialTask = useRef(false);
@@ -237,6 +241,13 @@ export function BoardScreen({ spaceId, initialTaskId }: { spaceId: string; initi
           canEdit={board.role === "OWNER"}
           onSave={(name) => run(() => renameSpace(spaceId, name))}
         />
+        <button
+          type="button"
+          className="rounded-full border border-line px-3 py-1 text-sm"
+          onClick={() => setArchiveOpen(true)}
+        >
+          Archived
+        </button>
         <span
           className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium ${
             live ? "bg-emerald-100 text-emerald-800" : "bg-stone-200 text-stone-600"
@@ -353,12 +364,114 @@ export function BoardScreen({ spaceId, initialTaskId }: { spaceId: string; initi
             applyBoard(await updateTask(spaceId, openTask.id, draft));
             setEditing(null);
           }}
-          onDelete={async () => {
-            applyBoard(await deleteTask(spaceId, openTask.id));
+          onArchive={async () => {
+            applyBoard(await archiveTask(spaceId, openTask.id));
             setEditing(null);
           }}
         />
       ) : null}
+      {archiveOpen ? (
+        <ArchivePanel
+          spaceId={spaceId}
+          columns={board.columns}
+          onClose={() => setArchiveOpen(false)}
+          onChange={applyBoard}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+function ArchivePanel({
+  spaceId,
+  columns,
+  onClose,
+  onChange,
+}: {
+  spaceId: string;
+  columns: Column[];
+  onClose: () => void;
+  onChange: (board: Board) => void;
+}) {
+  const [tasks, setTasks] = useState<Task[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    listArchivedTasks(spaceId)
+      .then((next) => {
+        if (!cancelled) {
+          setTasks(next);
+          setError(null);
+        }
+      })
+      .catch((caught) => {
+        if (!cancelled) {
+          setError(apiMessage(caught));
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [spaceId]);
+
+  async function refresh(next: Board) {
+    onChange(next);
+    setTasks(await listArchivedTasks(spaceId));
+  }
+
+  return (
+    <div className="fixed inset-0 z-30 overflow-y-auto bg-ink/40 p-4">
+      <div className="mx-auto flex min-h-full w-full max-w-xl items-center">
+        <section className="w-full rounded-3xl bg-paper p-6">
+          <div className="flex items-center justify-between">
+            <h2 className="text-lg font-semibold">Archived</h2>
+            <button type="button" onClick={onClose} className="text-sm text-muted">
+              Close
+            </button>
+          </div>
+          {error ? <p className="mt-3 text-sm text-red-700">{error}</p> : null}
+          {tasks === null && !error ? <p className="mt-3 text-sm text-muted">Loading archived tasks…</p> : null}
+          {tasks?.length === 0 ? <p className="mt-3 text-sm text-muted">Nothing is archived.</p> : null}
+          <ul className="mt-4 space-y-3">
+            {tasks?.map((task) => (
+              <li key={task.id} className="rounded-2xl border border-line px-3 py-3">
+                <p className="font-medium">{task.title}</p>
+                <p className="text-sm text-muted">
+                  {columns.find((column) => column.id === task.columnId)?.name ?? "Column"}
+                </p>
+                <div className="mt-2 flex gap-3">
+                  <button
+                    type="button"
+                    className="text-sm font-medium text-accent"
+                    onClick={() => {
+                      void restoreTask(spaceId, task.id)
+                        .then((next) => refresh(next))
+                        .catch((caught) => setError(apiMessage(caught)));
+                    }}
+                  >
+                    Restore
+                  </button>
+                  <button
+                    type="button"
+                    className="text-sm text-red-700"
+                    onClick={() => {
+                      if (!window.confirm(`Delete ${task.title} permanently?`)) {
+                        return;
+                      }
+                      void deleteTask(spaceId, task.id)
+                        .then((next) => refresh(next))
+                        .catch((caught) => setError(apiMessage(caught)));
+                    }}
+                  >
+                    Delete
+                  </button>
+                </div>
+              </li>
+            ))}
+          </ul>
+        </section>
+      </div>
     </div>
   );
 }
@@ -641,7 +754,7 @@ function TaskEditor({
   onBoard,
   onClose,
   onSave,
-  onDelete,
+  onArchive,
 }: {
   task: Task;
   members: Member[];
@@ -657,7 +770,7 @@ function TaskEditor({
     priority: TaskPriority;
     dueOn: { value: string | null };
   }) => Promise<void>;
-  onDelete: () => Promise<void>;
+  onArchive: () => Promise<void>;
 }) {
   const [title, setTitle] = useState(task.title);
   const [description, setDescription] = useState(task.description ?? "");
@@ -799,8 +912,8 @@ function TaskEditor({
               onBoard={onBoard}
             />
             <div className="mt-5 flex items-center justify-between">
-              <button type="button" className="text-sm text-red-700" onClick={() => void onDelete()}>
-                Delete task
+              <button type="button" className="text-sm text-red-700" onClick={() => void onArchive()}>
+                Archive task
               </button>
               <div className="flex gap-2">
                 <button type="button" onClick={onClose} className="rounded-xl px-3 py-2 text-sm">

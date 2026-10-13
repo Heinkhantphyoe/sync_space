@@ -7,6 +7,7 @@ import type {
   InviteOutcome,
   PendingInvite,
   SpaceSummary,
+  Task,
   TaskActivity,
   TaskLabel,
   TaskPriority,
@@ -231,6 +232,18 @@ export function deleteCheck(spaceId: string, taskId: string, checkId: string) {
   return request<Board>(`/api/spaces/${spaceId}/tasks/${taskId}/checks/${checkId}`, {
     method: "DELETE",
   });
+}
+
+export function listArchivedTasks(spaceId: string) {
+  return request<Task[]>(`/api/spaces/${spaceId}/archive`);
+}
+
+export function archiveTask(spaceId: string, taskId: string) {
+  return request<Board>(`/api/spaces/${spaceId}/tasks/${taskId}/archive`, { method: "POST" });
+}
+
+export function restoreTask(spaceId: string, taskId: string) {
+  return request<Board>(`/api/spaces/${spaceId}/tasks/${taskId}/restore`, { method: "POST" });
 }
 
 export function deleteTask(spaceId: string, taskId: string) {

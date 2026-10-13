@@ -477,6 +477,68 @@ class SyncSpaceIntegrationTest {
 	}
 
 	@Test
+	void archivedTasksLeaveTheBoardUntilRestored() throws Exception {
+		register("ada.archive@example.com", "Ada");
+		register("outsider.archive@example.com", "Outsider");
+		String ada = login("ada.archive@example.com");
+		String outsider = login("outsider.archive@example.com");
+		String adaId = userId(ada);
+
+		MvcResult created = mvc.perform(post("/api/spaces")
+						.header("Authorization", "Bearer " + ada)
+						.contentType(MediaType.APPLICATION_JSON)
+						.content("{\"name\":\"Archive\"}"))
+				.andExpect(status().isCreated())
+				.andReturn();
+		String spaceId = JsonPath.read(created.getResponse().getContentAsString(), "$.id");
+		String board = mvc.perform(get("/api/spaces/" + spaceId + "/board").header("Authorization", "Bearer " + ada))
+				.andReturn()
+				.getResponse()
+				.getContentAsString();
+		String columnId = JsonPath.read(board, "$.columns[0].id");
+		String added = mvc.perform(post("/api/spaces/" + spaceId + "/tasks")
+						.header("Authorization", "Bearer " + ada)
+						.contentType(MediaType.APPLICATION_JSON)
+						.content("{\"columnId\":\"" + columnId + "\",\"title\":\"Old work\"}"))
+				.andReturn()
+				.getResponse()
+				.getContentAsString();
+		String taskId = JsonPath.read(added, "$.columns[0].tasks[0].id");
+		mvc.perform(patch("/api/spaces/" + spaceId + "/tasks/" + taskId + "/assignees")
+						.header("Authorization", "Bearer " + ada)
+						.contentType(MediaType.APPLICATION_JSON)
+						.content("{\"userIds\":[\"" + adaId + "\"]}"))
+				.andExpect(status().isOk());
+
+		mvc.perform(post("/api/spaces/" + spaceId + "/tasks/" + taskId + "/archive")
+						.header("Authorization", "Bearer " + outsider))
+				.andExpect(status().isForbidden());
+		mvc.perform(post("/api/spaces/" + spaceId + "/tasks/" + taskId + "/archive")
+						.header("Authorization", "Bearer " + ada))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.columns[0].tasks.length()").value(0));
+		mvc.perform(get("/api/me/tasks").header("Authorization", "Bearer " + ada))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.length()").value(0));
+		mvc.perform(get("/api/spaces/" + spaceId + "/archive").header("Authorization", "Bearer " + ada))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.length()").value(1))
+				.andExpect(jsonPath("$[0].title").value("Old work"))
+				.andExpect(jsonPath("$[0].columnId").value(columnId));
+		mvc.perform(post("/api/spaces/" + spaceId + "/tasks/" + taskId + "/restore")
+						.header("Authorization", "Bearer " + ada))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.columns[0].tasks.length()").value(1))
+				.andExpect(jsonPath("$.columns[0].tasks[0].title").value("Old work"));
+		mvc.perform(get("/api/spaces/" + spaceId + "/archive").header("Authorization", "Bearer " + ada))
+				.andExpect(jsonPath("$.length()").value(0));
+		mvc.perform(get("/api/spaces/" + spaceId + "/tasks/" + taskId + "/activity")
+						.header("Authorization", "Bearer " + ada))
+				.andExpect(jsonPath("$[?(@.kind == 'ARCHIVED')].summary", hasItem("archived this task")))
+				.andExpect(jsonPath("$[?(@.kind == 'RESTORED')].summary", hasItem("restored this task")));
+	}
+
+	@Test
 	void assignmentAndCommentsNotifyTheOtherPerson() throws Exception {
 		register("ada.notes@example.com", "Ada");
 		register("grace.notes@example.com", "Grace");

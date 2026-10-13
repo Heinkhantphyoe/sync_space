@@ -87,6 +87,21 @@ public class BoardController {
 		return boardService.setDue(spaceId, taskId, CurrentUser.get(), request);
 	}
 
+	@GetMapping("/archive")
+	List<TaskResponse> archived(@PathVariable UUID spaceId) {
+		return boardService.archived(spaceId, CurrentUser.get());
+	}
+
+	@PostMapping("/tasks/{taskId}/archive")
+	BoardResponse archiveTask(@PathVariable UUID spaceId, @PathVariable UUID taskId) {
+		return boardService.archiveTask(spaceId, taskId, CurrentUser.get());
+	}
+
+	@PostMapping("/tasks/{taskId}/restore")
+	BoardResponse restoreTask(@PathVariable UUID spaceId, @PathVariable UUID taskId) {
+		return boardService.restoreTask(spaceId, taskId, CurrentUser.get());
+	}
+
 	@DeleteMapping("/tasks/{taskId}")
 	BoardResponse deleteTask(@PathVariable UUID spaceId, @PathVariable UUID taskId) {
 		return boardService.deleteTask(spaceId, taskId, CurrentUser.get());

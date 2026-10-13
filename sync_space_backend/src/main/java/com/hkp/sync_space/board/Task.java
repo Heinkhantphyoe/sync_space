@@ -54,6 +54,9 @@ public class Task {
 	@Column(nullable = false)
 	private int position;
 
+	@Column(nullable = false)
+	private boolean archived;
+
 	@ManyToOne(fetch = FetchType.LAZY, optional = false)
 	@JoinColumn(name = "created_by", nullable = false)
 	private User createdBy;
@@ -88,6 +91,7 @@ public class Task {
 		this.title = title;
 		this.description = description;
 		this.position = position;
+		this.archived = false;
 		this.createdBy = createdBy;
 		this.assignees = new LinkedHashSet<>();
 		this.priority = TaskPriority.MEDIUM;
