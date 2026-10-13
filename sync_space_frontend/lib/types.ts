@@ -38,6 +38,13 @@ export type TaskLabel = "BUG" | "FEATURE" | "DESIGN";
 
 export type TaskPriority = "LOW" | "MEDIUM" | "HIGH";
 
+export type TaskCheck = {
+  id: string;
+  title: string;
+  done: boolean;
+  position: number;
+};
+
 export type Task = {
   id: string;
   columnId: string;
@@ -50,6 +57,7 @@ export type Task = {
   priority: TaskPriority;
   labels: TaskLabel[];
   dueOn: string | null;
+  checks: TaskCheck[];
 };
 
 export type Column = {

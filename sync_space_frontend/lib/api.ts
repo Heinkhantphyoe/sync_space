@@ -200,6 +200,26 @@ export function updateTask(
   });
 }
 
+export function createCheck(spaceId: string, taskId: string, title: string) {
+  return request<Board>(`/api/spaces/${spaceId}/tasks/${taskId}/checks`, {
+    method: "POST",
+    body: JSON.stringify({ title }),
+  });
+}
+
+export function updateCheck(spaceId: string, taskId: string, checkId: string, done: boolean) {
+  return request<Board>(`/api/spaces/${spaceId}/tasks/${taskId}/checks/${checkId}`, {
+    method: "PATCH",
+    body: JSON.stringify({ done }),
+  });
+}
+
+export function deleteCheck(spaceId: string, taskId: string, checkId: string) {
+  return request<Board>(`/api/spaces/${spaceId}/tasks/${taskId}/checks/${checkId}`, {
+    method: "DELETE",
+  });
+}
+
 export function deleteTask(spaceId: string, taskId: string) {
   return request<Board>(`/api/spaces/${spaceId}/tasks/${taskId}`, {
     method: "DELETE",

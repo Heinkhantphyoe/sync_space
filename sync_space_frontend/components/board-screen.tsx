@@ -20,8 +20,10 @@ import { useShell } from "@/components/app-shell";
 import {
   addTaskComment,
   apiMessage,
+  createCheck,
   createColumn,
   createTask,
+  deleteCheck,
   deleteColumn,
   deleteSpace,
   deleteTask,
@@ -32,6 +34,7 @@ import {
   renameColumn,
   renameSpace,
   reorderColumns,
+  updateCheck,
   updateTask,
 } from "@/lib/api";
 import { connectBoardSocket } from "@/lib/board-socket";
@@ -344,6 +347,7 @@ export function BoardScreen({ spaceId, initialTaskId }: { spaceId: string; initi
           members={board.members}
           spaceId={spaceId}
           revision={board.revision}
+          onBoard={applyBoard}
           onClose={() => setEditing(null)}
           onSave={async (draft) => {
             applyBoard(await updateTask(spaceId, openTask.id, draft));
@@ -589,6 +593,11 @@ function TaskBody({ task, columnName }: { task: Task; columnName: string }) {
         <AssigneeStack assignees={task.assignees} />
       </div>
       <TaskMeta task={task} />
+      {task.checks.length > 0 ? (
+        <p className="mt-1 text-xs text-muted">
+          {task.checks.filter((item) => item.done).length}/{task.checks.length} checklist
+        </p>
+      ) : null}
       {task.dueOn ? (
         <p className={`mt-1 text-xs font-medium ${overdue ? "text-rose-700" : "text-muted"}`}>
           {overdue ? "Overdue" : "Due"} {formatDue(task.dueOn)}
@@ -629,6 +638,7 @@ function TaskEditor({
   members,
   spaceId,
   revision,
+  onBoard,
   onClose,
   onSave,
   onDelete,
@@ -637,6 +647,7 @@ function TaskEditor({
   members: Member[];
   spaceId: string;
   revision: number;
+  onBoard: (board: Board) => void;
   onClose: () => void;
   onSave: (draft: {
     title: string;
@@ -780,6 +791,12 @@ function TaskEditor({
                   return [...current, { userId: member.userId, displayName: member.displayName }];
                 });
               }}
+            />
+            <Checklist
+              task={task}
+              spaceId={spaceId}
+              disabled={saving}
+              onBoard={onBoard}
             />
             <div className="mt-5 flex items-center justify-between">
               <button type="button" className="text-sm text-red-700" onClick={() => void onDelete()}>
@@ -1237,6 +1254,108 @@ function moveLocal(board: Board, taskId: string, toColumnId: string, toIndex: nu
       tasks: column.tasks.map((item, position) => ({ ...item, position })),
     })),
   };
+}
+
+function Checklist({
+  task,
+  spaceId,
+  disabled,
+  onBoard,
+}: {
+  task: Task;
+  spaceId: string;
+  disabled: boolean;
+  onBoard: (board: Board) => void;
+}) {
+  const [title, setTitle] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const done = task.checks.filter((item) => item.done).length;
+
+  async function run(action: () => Promise<Board>) {
+    if (busy) {
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      onBoard(await action());
+    } catch (caught) {
+      setError(apiMessage(caught));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <fieldset className="mt-4" disabled={disabled || busy}>
+      <legend className="text-sm font-medium">
+        Checklist{task.checks.length > 0 ? ` ${done}/${task.checks.length}` : ""}
+      </legend>
+      <ul className="mt-2 space-y-1">
+        {task.checks.map((item) => (
+          <li key={item.id} className="flex items-center gap-2">
+            <input
+              type="checkbox"
+              checked={item.done}
+              aria-label={item.done ? `Mark ${item.title} not done` : `Mark ${item.title} done`}
+              onChange={() => void run(() => updateCheck(spaceId, task.id, item.id, !item.done))}
+            />
+            <span className={`min-w-0 flex-1 text-sm ${item.done ? "text-muted line-through" : ""}`}>{item.title}</span>
+            <button
+              type="button"
+              className="text-sm text-muted"
+              aria-label={`Remove ${item.title}`}
+              onClick={() => void run(() => deleteCheck(spaceId, task.id, item.id))}
+            >
+              ×
+            </button>
+          </li>
+        ))}
+      </ul>
+      <div className="mt-2 flex gap-2">
+        <input
+          value={title}
+          onChange={(event) => setTitle(event.target.value)}
+          placeholder="Add an item"
+          className="min-w-0 flex-1 rounded-xl border border-line px-3 py-2 text-sm outline-none focus:border-accent"
+          onKeyDown={(event) => {
+            if (event.key !== "Enter") {
+              return;
+            }
+            event.preventDefault();
+            const trimmed = title.trim();
+            if (!trimmed) {
+              return;
+            }
+            void run(async () => {
+              const next = await createCheck(spaceId, task.id, trimmed);
+              setTitle("");
+              return next;
+            });
+          }}
+        />
+        <button
+          type="button"
+          className="rounded-xl border border-line px-3 py-2 text-sm"
+          onClick={() => {
+            const trimmed = title.trim();
+            if (!trimmed) {
+              return;
+            }
+            void run(async () => {
+              const next = await createCheck(spaceId, task.id, trimmed);
+              setTitle("");
+              return next;
+            });
+          }}
+        >
+          Add
+        </button>
+      </div>
+      {error ? <p className="mt-2 text-sm text-red-700">{error}</p> : null}
+    </fieldset>
+  );
 }
 
 function AssigneePicker({

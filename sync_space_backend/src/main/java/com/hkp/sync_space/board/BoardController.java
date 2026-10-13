@@ -103,6 +103,23 @@ public class BoardController {
 		return boardService.activity(spaceId, taskId, CurrentUser.get());
 	}
 
+	@PostMapping("/tasks/{taskId}/checks")
+	BoardResponse addCheck(@PathVariable UUID spaceId, @PathVariable UUID taskId,
+			@Valid @RequestBody CreateCheckRequest request) {
+		return boardService.addCheck(spaceId, taskId, CurrentUser.get(), request);
+	}
+
+	@PatchMapping("/tasks/{taskId}/checks/{checkId}")
+	BoardResponse updateCheck(@PathVariable UUID spaceId, @PathVariable UUID taskId, @PathVariable UUID checkId,
+			@Valid @RequestBody UpdateCheckRequest request) {
+		return boardService.updateCheck(spaceId, taskId, checkId, CurrentUser.get(), request);
+	}
+
+	@DeleteMapping("/tasks/{taskId}/checks/{checkId}")
+	BoardResponse deleteCheck(@PathVariable UUID spaceId, @PathVariable UUID taskId, @PathVariable UUID checkId) {
+		return boardService.deleteCheck(spaceId, taskId, checkId, CurrentUser.get());
+	}
+
 	@PostMapping("/tasks/{taskId}/comments")
 	List<TaskActivityResponse> comment(@PathVariable UUID spaceId, @PathVariable UUID taskId,
 			@Valid @RequestBody CreateCommentRequest request) {

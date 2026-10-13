@@ -16,5 +16,6 @@ public record TaskResponse(
 		List<AssigneeResponse> assignees,
 		TaskPriority priority,
 		List<TaskLabel> labels,
-		LocalDate dueOn) {
+		LocalDate dueOn,
+		List<CheckResponse> checks) {
 }

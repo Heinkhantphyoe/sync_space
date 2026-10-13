@@ -41,19 +41,21 @@ public class BoardService {
 	private final BoardColumnRepository columnRepository;
 	private final TaskRepository taskRepository;
 	private final TaskActivityRepository activityRepository;
+	private final TaskCheckRepository checkRepository;
 	private final UserRepository userRepository;
 	private final SpaceAccess spaceAccess;
 	private final ApplicationEventPublisher events;
 
 	public BoardService(SpaceRepository spaceRepository, SpaceMemberRepository memberRepository,
 			BoardColumnRepository columnRepository, TaskRepository taskRepository,
-			TaskActivityRepository activityRepository, UserRepository userRepository, SpaceAccess spaceAccess,
-			ApplicationEventPublisher events) {
+			TaskActivityRepository activityRepository, TaskCheckRepository checkRepository, UserRepository userRepository,
+			SpaceAccess spaceAccess, ApplicationEventPublisher events) {
 		this.spaceRepository = spaceRepository;
 		this.memberRepository = memberRepository;
 		this.columnRepository = columnRepository;
 		this.taskRepository = taskRepository;
 		this.activityRepository = activityRepository;
+		this.checkRepository = checkRepository;
 		this.userRepository = userRepository;
 		this.spaceAccess = spaceAccess;
 		this.events = events;
@@ -69,11 +71,13 @@ public class BoardService {
 				.orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Space not found"));
 		Map<UUID, List<Task>> tasksByColumn = taskRepository.findBySpaceId(spaceId).stream()
 				.collect(Collectors.groupingBy(task -> task.getColumn().getId()));
+		Map<UUID, List<TaskCheck>> checksByTask = checkRepository.findBySpaceId(spaceId).stream()
+				.collect(Collectors.groupingBy(item -> item.getTask().getId()));
 		List<ColumnResponse> columns = columnRepository.findBySpaceIdOrderByPositionAsc(spaceId).stream()
 				.map(column -> new ColumnResponse(column.getId(), column.getName(), column.getPosition(),
 						tasksByColumn.getOrDefault(column.getId(), List.of()).stream()
 								.sorted(Comparator.comparingInt(Task::getPosition))
-								.map(this::toTask)
+								.map(task -> toTask(task, checksByTask.getOrDefault(task.getId(), List.of())))
 								.toList()))
 				.toList();
 		List<MemberResponse> members = memberRepository.findBySpaceId(spaceId).stream()
@@ -294,6 +298,73 @@ public class BoardService {
 		}
 	}
 
+	@Transactional
+	public BoardResponse addCheck(UUID spaceId, UUID taskId, AuthUser actor, CreateCheckRequest request) {
+		SpaceMember member = spaceAccess.lockMember(spaceId, actor.id());
+		Task task = task(spaceId, taskId);
+		String title = request.title().trim();
+		int position = checkRepository.findByTaskIdOrderByPositionAsc(taskId).size();
+		checkRepository.save(new TaskCheck(task, title, position));
+		record(member.getSpace(), task, user(actor.id()), TaskActivityKind.CHECK_ADDED, title, Instant.now());
+		task.setUpdatedAt(Instant.now());
+		return touchAndPublish(member, BoardEvents.TASK_UPDATED);
+	}
+
+	@Transactional
+	public BoardResponse updateCheck(UUID spaceId, UUID taskId, UUID checkId, AuthUser actor, UpdateCheckRequest request) {
+		if (request.title() == null && request.done() == null) {
+			throw new ApiException(HttpStatus.BAD_REQUEST, "Nothing to update");
+		}
+		SpaceMember member = spaceAccess.lockMember(spaceId, actor.id());
+		Task task = task(spaceId, taskId);
+		TaskCheck item = checkRepository.findByIdAndTaskId(checkId, taskId)
+				.orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Checklist item not found"));
+		User actorUser = user(actor.id());
+		Instant stamp = Instant.now();
+		boolean changed = false;
+		if (request.title() != null) {
+			String title = request.title().trim();
+			if (title.isEmpty()) {
+				throw new ApiException(HttpStatus.BAD_REQUEST, "Checklist item is required");
+			}
+			if (!title.equals(item.getTitle())) {
+				item.setTitle(title);
+				changed = true;
+			}
+		}
+		if (request.done() != null && request.done() != item.isDone()) {
+			item.setDone(request.done());
+			record(member.getSpace(), task, actorUser,
+					request.done() ? TaskActivityKind.CHECK_COMPLETED : TaskActivityKind.CHECK_REOPENED, item.getTitle(),
+					stamp);
+			changed = true;
+		}
+		if (!changed) {
+			return BoardResponses.from(loadState(spaceId), member.getRole());
+		}
+		task.setUpdatedAt(Instant.now());
+		return touchAndPublish(member, BoardEvents.TASK_UPDATED);
+	}
+
+	@Transactional
+	public BoardResponse deleteCheck(UUID spaceId, UUID taskId, UUID checkId, AuthUser actor) {
+		SpaceMember member = spaceAccess.lockMember(spaceId, actor.id());
+		Task task = task(spaceId, taskId);
+		TaskCheck item = checkRepository.findByIdAndTaskId(checkId, taskId)
+				.orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Checklist item not found"));
+		String title = item.getTitle();
+		checkRepository.delete(item);
+		List<TaskCheck> remaining = checkRepository.findByTaskIdOrderByPositionAsc(taskId).stream()
+				.filter(existing -> !existing.getId().equals(checkId))
+				.toList();
+		for (int index = 0; index < remaining.size(); index++) {
+			remaining.get(index).setPosition(index);
+		}
+		record(member.getSpace(), task, user(actor.id()), TaskActivityKind.CHECK_REMOVED, title, Instant.now());
+		task.setUpdatedAt(Instant.now());
+		return touchAndPublish(member, BoardEvents.TASK_UPDATED);
+	}
+
 	public List<TaskActivityResponse> activity(UUID spaceId, UUID taskId, AuthUser actor) {
 		spaceAccess.requireMember(spaceId, actor.id());
 		task(spaceId, taskId);
@@ -468,13 +539,17 @@ public class BoardService {
 			case DUE_CHANGED -> entry.getBody() == null
 					? "cleared the due date"
 					: "set the due date to " + LocalDate.parse(entry.getBody()).format(DUE_FORMAT);
+			case CHECK_ADDED -> "added checklist item " + entry.getBody();
+			case CHECK_COMPLETED -> "checked " + entry.getBody();
+			case CHECK_REOPENED -> "unchecked " + entry.getBody();
+			case CHECK_REMOVED -> "removed checklist item " + entry.getBody();
 		};
 		String body = entry.getKind() == TaskActivityKind.COMMENT ? entry.getBody() : null;
 		return new TaskActivityResponse(entry.getId(), entry.getKind().name(), entry.getActor().getId(),
 				entry.getActor().getDisplayName(), summary, body, entry.getCreatedAt());
 	}
 
-	private TaskResponse toTask(Task task) {
+	private TaskResponse toTask(Task task, List<TaskCheck> checks) {
 		List<AssigneeResponse> assignees = task.getAssignees().stream()
 				.sorted(Comparator.comparing(User::getDisplayName, String.CASE_INSENSITIVE_ORDER))
 				.map(assignee -> new AssigneeResponse(assignee.getId(), assignee.getDisplayName()))
@@ -482,9 +557,13 @@ public class BoardService {
 		List<TaskLabel> labels = task.getLabels().stream()
 				.sorted(Comparator.comparingInt(TaskLabel::ordinal))
 				.toList();
+		List<CheckResponse> checkItems = checks.stream()
+				.sorted(Comparator.comparingInt(TaskCheck::getPosition))
+				.map(item -> new CheckResponse(item.getId(), item.getTitle(), item.isDone(), item.getPosition()))
+				.toList();
 		return new TaskResponse(task.getId(), task.getColumn().getId(), task.getTitle(), task.getDescription(),
 				task.getPosition(), task.getCreatedBy().getId(), task.getUpdatedAt(), assignees, task.getPriority(),
-				labels, task.getDueOn());
+				labels, task.getDueOn(), checkItems);
 	}
 
 	private static void rewrite(List<Task> tasks) {

@@ -477,6 +477,83 @@ class SyncSpaceIntegrationTest {
 	}
 
 	@Test
+	void checklistItemsStayWithTheTask() throws Exception {
+		register("ada.checks@example.com", "Ada");
+		register("outsider.checks@example.com", "Outsider");
+		String ada = login("ada.checks@example.com");
+		String outsider = login("outsider.checks@example.com");
+		MvcResult created = mvc.perform(post("/api/spaces")
+						.header("Authorization", "Bearer " + ada)
+						.contentType(MediaType.APPLICATION_JSON)
+						.content("{\"name\":\"Checks\"}"))
+				.andExpect(status().isCreated())
+				.andReturn();
+		String spaceId = JsonPath.read(created.getResponse().getContentAsString(), "$.id");
+		String board = mvc.perform(get("/api/spaces/" + spaceId + "/board").header("Authorization", "Bearer " + ada))
+				.andReturn()
+				.getResponse()
+				.getContentAsString();
+		String columnId = JsonPath.read(board, "$.columns[0].id");
+		String added = mvc.perform(post("/api/spaces/" + spaceId + "/tasks")
+						.header("Authorization", "Bearer " + ada)
+						.contentType(MediaType.APPLICATION_JSON)
+						.content("{\"columnId\":\"" + columnId + "\",\"title\":\"Launch\"}"))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.columns[0].tasks[0].checks.length()").value(0))
+				.andReturn()
+				.getResponse()
+				.getContentAsString();
+		String taskId = JsonPath.read(added, "$.columns[0].tasks[0].id");
+
+		mvc.perform(post("/api/spaces/" + spaceId + "/tasks/" + taskId + "/checks")
+						.header("Authorization", "Bearer " + outsider)
+						.contentType(MediaType.APPLICATION_JSON)
+						.content("{\"title\":\"Write notes\"}"))
+				.andExpect(status().isForbidden());
+		mvc.perform(post("/api/spaces/" + spaceId + "/tasks/" + taskId + "/checks")
+						.header("Authorization", "Bearer " + ada)
+						.contentType(MediaType.APPLICATION_JSON)
+						.content("{\"title\":\"  \"}"))
+				.andExpect(status().isBadRequest());
+		String withFirst = mvc.perform(post("/api/spaces/" + spaceId + "/tasks/" + taskId + "/checks")
+						.header("Authorization", "Bearer " + ada)
+						.contentType(MediaType.APPLICATION_JSON)
+						.content("{\"title\":\"Write notes\"}"))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.columns[0].tasks[0].checks.length()").value(1))
+				.andExpect(jsonPath("$.columns[0].tasks[0].checks[0].title").value("Write notes"))
+				.andExpect(jsonPath("$.columns[0].tasks[0].checks[0].done").value(false))
+				.andReturn()
+				.getResponse()
+				.getContentAsString();
+		String firstId = JsonPath.read(withFirst, "$.columns[0].tasks[0].checks[0].id");
+		mvc.perform(post("/api/spaces/" + spaceId + "/tasks/" + taskId + "/checks")
+						.header("Authorization", "Bearer " + ada)
+						.contentType(MediaType.APPLICATION_JSON)
+						.content("{\"title\":\"Ship\"}"))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.columns[0].tasks[0].checks[1].title").value("Ship"));
+		mvc.perform(patch("/api/spaces/" + spaceId + "/tasks/" + taskId + "/checks/" + firstId)
+						.header("Authorization", "Bearer " + ada)
+						.contentType(MediaType.APPLICATION_JSON)
+						.content("{\"done\":true}"))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.columns[0].tasks[0].checks[0].done").value(true));
+		mvc.perform(delete("/api/spaces/" + spaceId + "/tasks/" + taskId + "/checks/" + firstId)
+						.header("Authorization", "Bearer " + ada))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.columns[0].tasks[0].checks.length()").value(1))
+				.andExpect(jsonPath("$.columns[0].tasks[0].checks[0].title").value("Ship"))
+				.andExpect(jsonPath("$.columns[0].tasks[0].checks[0].position").value(0));
+		mvc.perform(get("/api/spaces/" + spaceId + "/tasks/" + taskId + "/activity")
+						.header("Authorization", "Bearer " + ada))
+				.andExpect(jsonPath("$[?(@.kind == 'CHECK_ADDED')].summary", hasItem("added checklist item Write notes")))
+				.andExpect(jsonPath("$[?(@.kind == 'CHECK_ADDED')].summary", hasItem("added checklist item Ship")))
+				.andExpect(jsonPath("$[?(@.kind == 'CHECK_COMPLETED')].summary", hasItem("checked Write notes")))
+				.andExpect(jsonPath("$[?(@.kind == 'CHECK_REMOVED')].summary", hasItem("removed checklist item Write notes")));
+	}
+
+	@Test
 	void unknownEmailIsInvitedUntilTheyRegister() throws Exception {
 		register("ada.invite@example.com", "Ada");
 		register("grace.invite@example.com", "Grace");
