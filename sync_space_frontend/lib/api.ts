@@ -1,5 +1,6 @@
 import { clearSession, getToken } from "@/lib/auth";
 import type {
+  AppNotification,
   AuthResponse,
   AssignedTask,
   Board,
@@ -78,6 +79,18 @@ export function getMe() {
 
 export function listMyTasks() {
   return request<AssignedTask[]>("/api/me/tasks");
+}
+
+export function listNotifications() {
+  return request<AppNotification[]>("/api/me/notifications");
+}
+
+export function markNotificationRead(notificationId: string) {
+  return request<AppNotification>(`/api/me/notifications/${notificationId}/read`, { method: "POST" });
+}
+
+export function markAllNotificationsRead() {
+  return request<void>("/api/me/notifications/read", { method: "POST" });
 }
 
 export function listSpaces() {

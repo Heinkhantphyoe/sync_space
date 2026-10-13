@@ -32,6 +32,16 @@ public class StompAuthChannelInterceptor implements ChannelInterceptor {
 		}
 		if (StompCommand.SUBSCRIBE.equals(accessor.getCommand())) {
 			UUID userId = (UUID) accessor.getSessionAttributes().get("userId");
+			if (userId == null) {
+				throw new AccessDeniedException("Login required");
+			}
+			UUID destinationUser = userId(accessor.getDestination());
+			if (destinationUser != null) {
+				if (!destinationUser.equals(userId)) {
+					throw new AccessDeniedException("You cannot read another person's notifications");
+				}
+				return message;
+			}
 			UUID connectedSpace = (UUID) accessor.getSessionAttributes().get("spaceId");
 			UUID destinationSpace = spaceId(accessor.getDestination());
 			if (userId == null || connectedSpace == null || destinationSpace == null
@@ -41,6 +51,18 @@ public class StompAuthChannelInterceptor implements ChannelInterceptor {
 			}
 		}
 		return message;
+	}
+
+	private static UUID userId(String destination) {
+		if (destination == null || !destination.startsWith("/topic/users/")) {
+			return null;
+		}
+		try {
+			return UUID.fromString(destination.substring("/topic/users/".length()));
+		}
+		catch (IllegalArgumentException exception) {
+			return null;
+		}
 	}
 
 	private static UUID spaceId(String destination) {

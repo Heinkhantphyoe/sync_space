@@ -42,20 +42,23 @@ public class BoardService {
 	private final TaskRepository taskRepository;
 	private final TaskActivityRepository activityRepository;
 	private final TaskCheckRepository checkRepository;
+	private final NotificationRepository notificationRepository;
 	private final UserRepository userRepository;
 	private final SpaceAccess spaceAccess;
 	private final ApplicationEventPublisher events;
 
 	public BoardService(SpaceRepository spaceRepository, SpaceMemberRepository memberRepository,
 			BoardColumnRepository columnRepository, TaskRepository taskRepository,
-			TaskActivityRepository activityRepository, TaskCheckRepository checkRepository, UserRepository userRepository,
-			SpaceAccess spaceAccess, ApplicationEventPublisher events) {
+			TaskActivityRepository activityRepository, TaskCheckRepository checkRepository,
+			NotificationRepository notificationRepository, UserRepository userRepository, SpaceAccess spaceAccess,
+			ApplicationEventPublisher events) {
 		this.spaceRepository = spaceRepository;
 		this.memberRepository = memberRepository;
 		this.columnRepository = columnRepository;
 		this.taskRepository = taskRepository;
 		this.activityRepository = activityRepository;
 		this.checkRepository = checkRepository;
+		this.notificationRepository = notificationRepository;
 		this.userRepository = userRepository;
 		this.spaceAccess = spaceAccess;
 		this.events = events;
@@ -379,7 +382,14 @@ public class BoardService {
 		if (body.isEmpty()) {
 			throw new ApiException(HttpStatus.BAD_REQUEST, "Comment is required");
 		}
-		record(member.getSpace(), task, user(actor.id()), TaskActivityKind.COMMENT, body, Instant.now());
+		User actorUser = user(actor.id());
+		record(member.getSpace(), task, actorUser, TaskActivityKind.COMMENT, body, Instant.now());
+		LinkedHashSet<User> recipients = new LinkedHashSet<>(task.getAssignees());
+		recipients.add(task.getCreatedBy());
+		Instant stamp = Instant.now();
+		for (User recipient : recipients) {
+			notify(recipient, member.getSpace(), task, actorUser, NotificationKind.COMMENT, body, stamp);
+		}
 		touchAndPublish(member, BoardEvents.TASK_COMMENTED);
 		return activityRepository.findForTask(spaceId, taskId).stream().map(this::toActivity).toList();
 	}
@@ -509,6 +519,7 @@ public class BoardService {
 				User assignee = usersById.get(userId);
 				task.getAssignees().add(assignee);
 				record(space, task, actor, TaskActivityKind.ASSIGNED, assignee.getDisplayName(), stamp);
+				notify(assignee, space, task, actor, NotificationKind.ASSIGNED, task.getTitle(), stamp);
 				stamp = stamp.plusMillis(1);
 			}
 		}
@@ -517,6 +528,15 @@ public class BoardService {
 
 	private void record(Space space, Task task, User actor, TaskActivityKind kind, String body, Instant createdAt) {
 		activityRepository.save(new TaskActivity(space, task, actor, kind, body, createdAt));
+	}
+
+	private void notify(User recipient, Space space, Task task, User actor, NotificationKind kind, String body, Instant createdAt) {
+		if (recipient.getId().equals(actor.getId())) {
+			return;
+		}
+		String text = body.length() > 500 ? body.substring(0, 500) : body;
+		Notification saved = notificationRepository.save(new Notification(recipient, space, task, actor, kind, text, createdAt));
+		events.publishEvent(new NotificationCreated(NotificationService.toResponse(saved)));
 	}
 
 	private User user(UUID id) {

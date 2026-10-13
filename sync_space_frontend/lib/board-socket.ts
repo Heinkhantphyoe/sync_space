@@ -1,7 +1,7 @@
 import { Client } from "@stomp/stompjs";
 
 import { getToken } from "@/lib/auth";
-import type { BoardEvent } from "@/lib/types";
+import type { AppNotification, BoardEvent } from "@/lib/types";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8080";
 
@@ -35,6 +35,26 @@ export function connectBoardSocket(
   });
   client.activate();
 
+  return () => {
+    void client.deactivate();
+  };
+}
+
+export function connectUserSocket(userId: string, onNotification: (notification: AppNotification) => void) {
+  const token = getToken();
+  if (!token) {
+    return () => {};
+  }
+  const client = new Client({
+    brokerURL: `${wsUrl()}/ws?token=${encodeURIComponent(token)}`,
+    reconnectDelay: 2000,
+    onConnect: () => {
+      client.subscribe(`/topic/users/${userId}`, (message) => {
+        onNotification(JSON.parse(message.body) as AppNotification);
+      });
+    },
+  });
+  client.activate();
   return () => {
     void client.deactivate();
   };

@@ -477,6 +477,77 @@ class SyncSpaceIntegrationTest {
 	}
 
 	@Test
+	void assignmentAndCommentsNotifyTheOtherPerson() throws Exception {
+		register("ada.notes@example.com", "Ada");
+		register("grace.notes@example.com", "Grace");
+		String ada = login("ada.notes@example.com");
+		String grace = login("grace.notes@example.com");
+		String adaId = userId(ada);
+		String graceId = userId(grace);
+
+		MvcResult created = mvc.perform(post("/api/spaces")
+						.header("Authorization", "Bearer " + ada)
+						.contentType(MediaType.APPLICATION_JSON)
+						.content("{\"name\":\"Notes\"}"))
+				.andExpect(status().isCreated())
+				.andReturn();
+		String spaceId = JsonPath.read(created.getResponse().getContentAsString(), "$.id");
+		mvc.perform(post("/api/spaces/" + spaceId + "/members")
+						.header("Authorization", "Bearer " + ada)
+						.contentType(MediaType.APPLICATION_JSON)
+						.content("{\"email\":\"grace.notes@example.com\"}"))
+				.andExpect(status().isOk());
+		String board = mvc.perform(get("/api/spaces/" + spaceId + "/board").header("Authorization", "Bearer " + ada))
+				.andReturn()
+				.getResponse()
+				.getContentAsString();
+		String columnId = JsonPath.read(board, "$.columns[0].id");
+		String added = mvc.perform(post("/api/spaces/" + spaceId + "/tasks")
+						.header("Authorization", "Bearer " + ada)
+						.contentType(MediaType.APPLICATION_JSON)
+						.content("{\"columnId\":\"" + columnId + "\",\"title\":\"Review copy\"}"))
+				.andReturn()
+				.getResponse()
+				.getContentAsString();
+		String taskId = JsonPath.read(added, "$.columns[0].tasks[0].id");
+
+		mvc.perform(patch("/api/spaces/" + spaceId + "/tasks/" + taskId + "/assignees")
+						.header("Authorization", "Bearer " + ada)
+						.contentType(MediaType.APPLICATION_JSON)
+						.content("{\"userIds\":[\"" + adaId + "\",\"" + graceId + "\"]}"))
+				.andExpect(status().isOk());
+		mvc.perform(post("/api/spaces/" + spaceId + "/tasks/" + taskId + "/comments")
+						.header("Authorization", "Bearer " + ada)
+						.contentType(MediaType.APPLICATION_JSON)
+						.content("{\"body\":\"Please look today\"}"))
+				.andExpect(status().isOk());
+
+		MvcResult graceNotes = mvc.perform(get("/api/me/notifications").header("Authorization", "Bearer " + grace))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.length()").value(2))
+				.andExpect(jsonPath("$[0].kind").value("COMMENT"))
+				.andExpect(jsonPath("$[0].body").value("Please look today"))
+				.andExpect(jsonPath("$[0].taskTitle").value("Review copy"))
+				.andExpect(jsonPath("$[0].read").value(false))
+				.andExpect(jsonPath("$[1].kind").value("ASSIGNED"))
+				.andReturn();
+		String noteId = JsonPath.read(graceNotes.getResponse().getContentAsString(), "$[1].id");
+		mvc.perform(get("/api/me/notifications").header("Authorization", "Bearer " + ada))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.length()").value(0));
+		mvc.perform(post("/api/me/notifications/" + noteId + "/read").header("Authorization", "Bearer " + ada))
+				.andExpect(status().isNotFound());
+		mvc.perform(post("/api/me/notifications/" + noteId + "/read").header("Authorization", "Bearer " + grace))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.read").value(true));
+		mvc.perform(post("/api/me/notifications/read").header("Authorization", "Bearer " + grace))
+				.andExpect(status().isNoContent());
+		mvc.perform(get("/api/me/notifications").header("Authorization", "Bearer " + grace))
+				.andExpect(jsonPath("$[0].read").value(true))
+				.andExpect(jsonPath("$[1].read").value(true));
+	}
+
+	@Test
 	void checklistItemsStayWithTheTask() throws Exception {
 		register("ada.checks@example.com", "Ada");
 		register("outsider.checks@example.com", "Outsider");

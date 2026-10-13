@@ -7,6 +7,7 @@ import org.springframework.transaction.event.TransactionalEventListener;
 
 import com.hkp.sync_space.board.BoardChanged;
 import com.hkp.sync_space.board.BoardEvent;
+import com.hkp.sync_space.board.NotificationCreated;
 
 @Component
 public class BoardRealtimeListener {
@@ -21,6 +22,11 @@ public class BoardRealtimeListener {
 	public void onBoardChanged(BoardChanged event) {
 		messagingTemplate.convertAndSend("/topic/spaces/" + event.spaceId(),
 				new BoardEvent(event.type(), event.board()));
+	}
+
+	@TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+	public void onNotification(NotificationCreated event) {
+		messagingTemplate.convertAndSend("/topic/users/" + event.notification().userId(), event.notification());
 	}
 
 }

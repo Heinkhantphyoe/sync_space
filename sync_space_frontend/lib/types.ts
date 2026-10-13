@@ -104,6 +104,21 @@ export type TaskActivityKind =
   | "PRIORITY_CHANGED"
   | "DUE_CHANGED";
 
+export type AppNotification = {
+  id: string;
+  kind: "ASSIGNED" | "COMMENT";
+  userId: string;
+  spaceId: string;
+  spaceName: string;
+  taskId: string;
+  taskTitle: string;
+  actorId: string;
+  actorName: string;
+  body: string;
+  createdAt: string;
+  read: boolean;
+};
+
 export type AssignedTask = {
   id: string;
   title: string;

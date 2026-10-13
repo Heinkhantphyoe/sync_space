@@ -30,12 +30,16 @@ public class JwtHandshakeInterceptor implements HandshakeInterceptor {
 		var params = UriComponentsBuilder.fromUri(request.getURI()).build().getQueryParams();
 		String token = params.getFirst("token");
 		String spaceIdValue = params.getFirst("spaceId");
-		if (token == null || token.isBlank() || spaceIdValue == null || spaceIdValue.isBlank()) {
+		if (token == null || token.isBlank()) {
 			response.setStatusCode(HttpStatus.UNAUTHORIZED);
 			return false;
 		}
 		try {
 			UUID userId = jwtService.parseUserId(token);
+			if (spaceIdValue == null || spaceIdValue.isBlank()) {
+				attributes.put("userId", userId);
+				return true;
+			}
 			UUID spaceId = UUID.fromString(spaceIdValue);
 			if (!memberRepository.existsBySpaceIdAndUserId(spaceId, userId)) {
 				response.setStatusCode(HttpStatus.FORBIDDEN);

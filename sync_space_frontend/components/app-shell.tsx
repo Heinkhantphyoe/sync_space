@@ -4,9 +4,21 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { createContext, useCallback, useContext, useEffect, useState } from "react";
 
-import { apiMessage, cancelInvite, createSpace, getMe, inviteMember, listInvites, listSpaces } from "@/lib/api";
+import {
+  apiMessage,
+  cancelInvite,
+  createSpace,
+  getMe,
+  inviteMember,
+  listInvites,
+  listNotifications,
+  listSpaces,
+  markAllNotificationsRead,
+  markNotificationRead,
+} from "@/lib/api";
 import { clearSession, getToken } from "@/lib/auth";
-import type { PendingInvite, SpaceSummary, User } from "@/lib/types";
+import { connectUserSocket } from "@/lib/board-socket";
+import type { AppNotification, PendingInvite, SpaceSummary, User } from "@/lib/types";
 
 type ShellValue = {
   user: User;
@@ -40,6 +52,8 @@ export function AppShell({
   const [inviteError, setInviteError] = useState<string | null>(null);
   const [inviteNotice, setInviteNotice] = useState<string | null>(null);
   const [pendingInvites, setPendingInvites] = useState<PendingInvite[]>([]);
+  const [notifications, setNotifications] = useState<AppNotification[]>([]);
+  const [showNotes, setShowNotes] = useState(false);
 
   const refreshSpaces = useCallback(async () => {
     setSpaces(await listSpaces());
@@ -97,6 +111,30 @@ export function AppShell({
   }
 
   const activeSpace = spaces.find((space) => space.id === activeSpaceId) ?? null;
+  const unread = notifications.filter((note) => !note.read).length;
+
+  useEffect(() => {
+    if (!user) {
+      return;
+    }
+    let cancelled = false;
+    listNotifications()
+      .then((next) => {
+        if (!cancelled) {
+          setNotifications(next);
+        }
+      })
+      .catch(() => {});
+    const stop = connectUserSocket(user.id, (notification) => {
+      setNotifications((current) =>
+        [notification, ...current.filter((item) => item.id !== notification.id)].slice(0, 30),
+      );
+    });
+    return () => {
+      cancelled = true;
+      stop();
+    };
+  }, [user]);
 
   useEffect(() => {
     setInviteEmail("");
@@ -242,6 +280,60 @@ export function AppShell({
               Create space
             </button>
           </form>
+          <div className="border-t border-white/10 px-4 pt-3">
+            <button
+              type="button"
+              className="text-sm font-medium text-stone-100"
+              aria-expanded={showNotes}
+              onClick={() => setShowNotes((current) => !current)}
+            >
+              Alerts{unread > 0 ? ` (${unread})` : ""}
+            </button>
+            {showNotes ? (
+              <div className="mt-2 max-h-64 space-y-2 overflow-y-auto pb-2">
+                {notifications.length === 0 ? <p className="text-xs text-stone-400">No alerts yet.</p> : null}
+                {notifications.map((note) => (
+                  <button
+                    key={note.id}
+                    type="button"
+                    className={`block w-full rounded-xl px-2 py-2 text-left text-xs ${
+                      note.read ? "text-stone-400" : "bg-white/10 text-white"
+                    }`}
+                    onClick={() => {
+                      void markNotificationRead(note.id).then((updated) => {
+                        setNotifications((current) =>
+                          current.map((item) => (item.id === updated.id ? updated : item)),
+                        );
+                      });
+                      setShowNotes(false);
+                      router.push(`/spaces/${note.spaceId}?task=${note.taskId}`);
+                    }}
+                  >
+                    <span className="block font-medium">
+                      {note.actorName} {note.kind === "ASSIGNED" ? "assigned you" : "commented"}
+                    </span>
+                    <span className="block truncate">
+                      {note.spaceName} · {note.taskTitle}
+                    </span>
+                    {note.kind === "COMMENT" ? <span className="block truncate">{note.body}</span> : null}
+                  </button>
+                ))}
+                {unread > 0 ? (
+                  <button
+                    type="button"
+                    className="text-xs text-stone-300"
+                    onClick={() => {
+                      void markAllNotificationsRead().then(() => {
+                        setNotifications((current) => current.map((item) => ({ ...item, read: true })));
+                      });
+                    }}
+                  >
+                    Mark all read
+                  </button>
+                ) : null}
+              </div>
+            ) : null}
+          </div>
           <div className="flex items-center justify-between gap-3 border-t border-white/10 px-4 py-4">
             <div className="min-w-0">
               <p className="truncate text-sm font-medium">{user.displayName}</p>
