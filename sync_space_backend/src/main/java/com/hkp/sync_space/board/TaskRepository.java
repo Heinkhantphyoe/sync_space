@@ -28,6 +28,18 @@ public interface TaskRepository extends JpaRepository<Task, UUID> {
 			""")
 	List<Task> findAssignedTo(@Param("spaceId") UUID spaceId, @Param("userId") UUID userId);
 
+	@Query("""
+			select distinct t from Task t
+			join fetch t.space
+			join fetch t.column
+			where exists (select assignee from t.assignees assignee where assignee.id = :userId)
+			and exists (
+				select membership from SpaceMember membership
+				where membership.space = t.space and membership.user.id = :userId
+			)
+			""")
+	List<Task> findAssignedToUser(@Param("userId") UUID userId);
+
 	List<Task> findByColumnIdOrderByPositionAsc(UUID columnId);
 
 	Optional<Task> findByIdAndSpaceId(UUID id, UUID spaceId);

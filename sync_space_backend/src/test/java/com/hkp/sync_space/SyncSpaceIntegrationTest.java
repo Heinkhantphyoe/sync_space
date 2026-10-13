@@ -476,6 +476,93 @@ class SyncSpaceIntegrationTest {
 	}
 
 	@Test
+	void assignedTasksAreListedAcrossSpaces() throws Exception {
+		register("ada.work@example.com", "Ada");
+		register("grace.work@example.com", "Grace");
+		String ada = login("ada.work@example.com");
+		String grace = login("grace.work@example.com");
+		String adaId = userId(ada);
+
+		MvcResult first = mvc.perform(post("/api/spaces")
+						.header("Authorization", "Bearer " + ada)
+						.contentType(MediaType.APPLICATION_JSON)
+						.content("{\"name\":\"Alpha\"}"))
+				.andExpect(status().isCreated())
+				.andReturn();
+		String alphaId = JsonPath.read(first.getResponse().getContentAsString(), "$.id");
+		String alphaBoard = mvc.perform(get("/api/spaces/" + alphaId + "/board").header("Authorization", "Bearer " + ada))
+				.andReturn()
+				.getResponse()
+				.getContentAsString();
+		String alphaColumn = JsonPath.read(alphaBoard, "$.columns[0].id");
+		String alphaTask = mvc.perform(post("/api/spaces/" + alphaId + "/tasks")
+						.header("Authorization", "Bearer " + ada)
+						.contentType(MediaType.APPLICATION_JSON)
+						.content("{\"columnId\":\"" + alphaColumn + "\",\"title\":\"Write notes\"}"))
+				.andReturn()
+				.getResponse()
+				.getContentAsString();
+		String laterId = JsonPath.read(alphaTask, "$.columns[0].tasks[0].id");
+		mvc.perform(patch("/api/spaces/" + alphaId + "/tasks/" + laterId + "/due")
+						.header("Authorization", "Bearer " + ada)
+						.contentType(MediaType.APPLICATION_JSON)
+						.content("{\"dueOn\":\"2026-12-01\"}"))
+				.andExpect(status().isOk());
+		mvc.perform(patch("/api/spaces/" + alphaId + "/tasks/" + laterId + "/assignees")
+						.header("Authorization", "Bearer " + ada)
+						.contentType(MediaType.APPLICATION_JSON)
+						.content("{\"userIds\":[\"" + adaId + "\"]}"))
+				.andExpect(status().isOk());
+
+		MvcResult second = mvc.perform(post("/api/spaces")
+						.header("Authorization", "Bearer " + grace)
+						.contentType(MediaType.APPLICATION_JSON)
+						.content("{\"name\":\"Beta\"}"))
+				.andExpect(status().isCreated())
+				.andReturn();
+		String betaId = JsonPath.read(second.getResponse().getContentAsString(), "$.id");
+		mvc.perform(post("/api/spaces/" + betaId + "/members")
+						.header("Authorization", "Bearer " + grace)
+						.contentType(MediaType.APPLICATION_JSON)
+						.content("{\"email\":\"ada.work@example.com\"}"))
+				.andExpect(status().isOk());
+		String betaBoard = mvc.perform(get("/api/spaces/" + betaId + "/board").header("Authorization", "Bearer " + grace))
+				.andReturn()
+				.getResponse()
+				.getContentAsString();
+		String betaColumn = JsonPath.read(betaBoard, "$.columns[2].id");
+		String betaTask = mvc.perform(post("/api/spaces/" + betaId + "/tasks")
+						.header("Authorization", "Bearer " + grace)
+						.contentType(MediaType.APPLICATION_JSON)
+						.content("{\"columnId\":\"" + betaColumn + "\",\"title\":\"Ship beta\"}"))
+				.andReturn()
+				.getResponse()
+				.getContentAsString();
+		String soonerId = JsonPath.read(betaTask, "$.columns[2].tasks[0].id");
+		mvc.perform(patch("/api/spaces/" + betaId + "/tasks/" + soonerId)
+						.header("Authorization", "Bearer " + ada)
+						.contentType(MediaType.APPLICATION_JSON)
+						.content("{\"dueOn\":{\"value\":\"2026-10-01\"},\"userIds\":[\"" + adaId + "\"]}"))
+				.andExpect(status().isOk());
+
+		mvc.perform(get("/api/me/tasks").header("Authorization", "Bearer " + ada))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.length()").value(2))
+				.andExpect(jsonPath("$[0].id").value(soonerId))
+				.andExpect(jsonPath("$[0].title").value("Ship beta"))
+				.andExpect(jsonPath("$[0].spaceName").value("Beta"))
+				.andExpect(jsonPath("$[0].columnName").value("Done"))
+				.andExpect(jsonPath("$[0].dueOn").value("2026-10-01"))
+				.andExpect(jsonPath("$[1].id").value(laterId))
+				.andExpect(jsonPath("$[1].spaceName").value("Alpha"));
+		mvc.perform(get("/api/me/tasks").header("Authorization", "Bearer " + grace))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.length()").value(0));
+		mvc.perform(get("/api/me/tasks"))
+				.andExpect(status().isUnauthorized());
+	}
+
+	@Test
 	void dueDateCanBeSetAndCleared() throws Exception {
 		register("ada.due@example.com", "Ada");
 		register("outsider.due@example.com", "Outsider");

@@ -1,6 +1,7 @@
 import { clearSession, getToken } from "@/lib/auth";
 import type {
   AuthResponse,
+  AssignedTask,
   Board,
   SpaceSummary,
   TaskActivity,
@@ -71,6 +72,10 @@ export function login(email: string, password: string) {
 
 export function getMe() {
   return request<User>("/api/auth/me");
+}
+
+export function listMyTasks() {
+  return request<AssignedTask[]>("/api/me/tasks");
 }
 
 export function listSpaces() {

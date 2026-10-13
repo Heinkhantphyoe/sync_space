@@ -37,7 +37,7 @@ import {
 import { connectBoardSocket } from "@/lib/board-socket";
 import type { Assignee, Board, Column, Member, Task, TaskActivity, TaskLabel, TaskPriority } from "@/lib/types";
 
-export function BoardScreen({ spaceId }: { spaceId: string }) {
+export function BoardScreen({ spaceId, initialTaskId }: { spaceId: string; initialTaskId?: string | null }) {
   const router = useRouter();
   const { user, refreshSpaces } = useShell();
   const [board, setBoard] = useState<Board | null>(null);
@@ -49,6 +49,7 @@ export function BoardScreen({ spaceId }: { spaceId: string }) {
   const [priorities, setPriorities] = useState<TaskPriority[]>([]);
   const [overdueOnly, setOverdueOnly] = useState(false);
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
+  const openedInitialTask = useRef(false);
 
   function applyBoard(next: Board) {
     setBoard((current) => (!current || next.revision >= current.revision ? next : current));
@@ -103,6 +104,17 @@ export function BoardScreen({ spaceId }: { spaceId: string }) {
       setLive,
     );
   }, [spaceId, user.id, refreshSpaces, router]);
+
+  useEffect(() => {
+    if (openedInitialTask.current || !board || !initialTaskId) {
+      return;
+    }
+    openedInitialTask.current = true;
+    const task = board.columns.flatMap((column) => column.tasks).find((item) => item.id === initialTaskId);
+    if (task) {
+      setEditing(task);
+    }
+  }, [board, initialTaskId]);
 
   useEffect(() => {
     if (!editing || !board) {

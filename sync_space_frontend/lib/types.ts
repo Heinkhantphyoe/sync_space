@@ -85,6 +85,16 @@ export type TaskActivityKind =
   | "PRIORITY_CHANGED"
   | "DUE_CHANGED";
 
+export type AssignedTask = {
+  id: string;
+  title: string;
+  priority: TaskPriority;
+  dueOn: string | null;
+  spaceId: string;
+  spaceName: string;
+  columnName: string;
+};
+
 export type TaskActivity = {
   id: string;
   kind: TaskActivityKind;
