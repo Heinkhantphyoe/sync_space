@@ -176,6 +176,7 @@ export function updateTask(
     userIds: string[];
     labels: TaskLabel[];
     priority: TaskPriority;
+    dueOn: { value: string | null };
   },
 ) {
   return request<Board>(`/api/spaces/${spaceId}/tasks/${taskId}`, {

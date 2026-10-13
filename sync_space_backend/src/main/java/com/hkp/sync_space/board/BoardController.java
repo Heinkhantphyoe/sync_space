@@ -81,6 +81,12 @@ public class BoardController {
 		return boardService.setPriority(spaceId, taskId, CurrentUser.get(), request);
 	}
 
+	@PatchMapping("/tasks/{taskId}/due")
+	BoardResponse setDue(@PathVariable UUID spaceId, @PathVariable UUID taskId,
+			@Valid @RequestBody SetTaskDueRequest request) {
+		return boardService.setDue(spaceId, taskId, CurrentUser.get(), request);
+	}
+
 	@DeleteMapping("/tasks/{taskId}")
 	BoardResponse deleteTask(@PathVariable UUID spaceId, @PathVariable UUID taskId) {
 		return boardService.deleteTask(spaceId, taskId, CurrentUser.get());

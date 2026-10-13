@@ -1,12 +1,15 @@
 package com.hkp.sync_space.board;
 
 import java.time.Instant;
+import java.time.LocalDate;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.EnumSet;
 import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
@@ -148,7 +151,7 @@ public class BoardService {
 	public BoardResponse updateTask(UUID spaceId, UUID taskId, AuthUser actor, UpdateTaskRequest request) {
 		SpaceMember member = spaceAccess.lockMember(spaceId, actor.id());
 		if (request.title() == null && request.description() == null && request.userIds() == null
-				&& request.labels() == null && request.priority() == null) {
+				&& request.labels() == null && request.priority() == null && request.dueOn() == null) {
 			throw new ApiException(HttpStatus.BAD_REQUEST, "Nothing to update");
 		}
 		Task task = task(spaceId, taskId);
@@ -165,6 +168,9 @@ public class BoardService {
 		}
 		if (request.priority() != null) {
 			stamp = applyPriority(member.getSpace(), task, actorUser, request.priority(), stamp);
+		}
+		if (request.dueOn() != null) {
+			stamp = applyDueOn(member.getSpace(), task, actorUser, request.dueOn().value(), stamp);
 		}
 		if (request.userIds() != null) {
 			stamp = applyAssignees(spaceId, member.getSpace(), task, actorUser, request.userIds(), stamp);
@@ -247,6 +253,20 @@ public class BoardService {
 		User actorUser = user(actor.id());
 		Instant start = Instant.now();
 		Instant stamp = applyPriority(member.getSpace(), task, actorUser, request.priority(), start);
+		if (stamp.equals(start)) {
+			return BoardResponses.from(loadState(spaceId), member.getRole());
+		}
+		task.setUpdatedAt(Instant.now());
+		return touchAndPublish(member, BoardEvents.TASK_UPDATED);
+	}
+
+	@Transactional
+	public BoardResponse setDue(UUID spaceId, UUID taskId, AuthUser actor, SetTaskDueRequest request) {
+		SpaceMember member = spaceAccess.lockMember(spaceId, actor.id());
+		Task task = task(spaceId, taskId);
+		User actorUser = user(actor.id());
+		Instant start = Instant.now();
+		Instant stamp = applyDueOn(member.getSpace(), task, actorUser, request.dueOn(), start);
 		if (stamp.equals(start)) {
 			return BoardResponses.from(loadState(spaceId), member.getRole());
 		}
@@ -376,6 +396,15 @@ public class BoardService {
 		return stamp.plusMillis(1);
 	}
 
+	private Instant applyDueOn(Space space, Task task, User actor, LocalDate dueOn, Instant stamp) {
+		if (Objects.equals(dueOn, task.getDueOn())) {
+			return stamp;
+		}
+		task.setDueOn(dueOn);
+		record(space, task, actor, TaskActivityKind.DUE_CHANGED, dueOn == null ? null : dueOn.toString(), stamp);
+		return stamp.plusMillis(1);
+	}
+
 	private Instant applyAssignees(UUID spaceId, Space space, Task task, User actor, List<UUID> userIds, Instant stamp) {
 		LinkedHashSet<UUID> requested = new LinkedHashSet<>();
 		for (UUID userId : userIds) {
@@ -436,6 +465,9 @@ public class BoardService {
 			case LABELED -> "added the " + entry.getBody() + " label";
 			case UNLABELED -> "removed the " + entry.getBody() + " label";
 			case PRIORITY_CHANGED -> "set priority to " + entry.getBody();
+			case DUE_CHANGED -> entry.getBody() == null
+					? "cleared the due date"
+					: "set the due date to " + LocalDate.parse(entry.getBody()).format(DUE_FORMAT);
 		};
 		String body = entry.getKind() == TaskActivityKind.COMMENT ? entry.getBody() : null;
 		return new TaskActivityResponse(entry.getId(), entry.getKind().name(), entry.getActor().getId(),
@@ -452,7 +484,7 @@ public class BoardService {
 				.toList();
 		return new TaskResponse(task.getId(), task.getColumn().getId(), task.getTitle(), task.getDescription(),
 				task.getPosition(), task.getCreatedBy().getId(), task.getUpdatedAt(), assignees, task.getPriority(),
-				labels);
+				labels, task.getDueOn());
 	}
 
 	private static void rewrite(List<Task> tasks) {
@@ -464,6 +496,8 @@ public class BoardService {
 	private static int clamp(int index, int size) {
 		return Math.min(Math.max(index, 0), size);
 	}
+
+	private static final DateTimeFormatter DUE_FORMAT = DateTimeFormatter.ofPattern("MMM d, yyyy", Locale.ENGLISH);
 
 	private static String blankToNull(String value) {
 		if (value == null) {

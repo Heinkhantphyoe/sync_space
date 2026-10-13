@@ -47,6 +47,7 @@ export function BoardScreen({ spaceId }: { spaceId: string }) {
   const [dragging, setDragging] = useState<Task | null>(null);
   const [search, setSearch] = useState("");
   const [priorities, setPriorities] = useState<TaskPriority[]>([]);
+  const [overdueOnly, setOverdueOnly] = useState(false);
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
 
   function applyBoard(next: Board) {
@@ -252,7 +253,8 @@ export function BoardScreen({ spaceId }: { spaceId: string }) {
       <BoardFilters
         search={search}
         priorities={priorities}
-        shown={shownCount(board, search, priorities)}
+        overdueOnly={overdueOnly}
+        shown={shownCount(board, search, priorities, overdueOnly)}
         total={taskCount(board)}
         onSearch={setSearch}
         onTogglePriority={(priority) =>
@@ -260,9 +262,11 @@ export function BoardScreen({ spaceId }: { spaceId: string }) {
             current.includes(priority) ? current.filter((item) => item !== priority) : [...current, priority],
           )
         }
+        onToggleOverdue={() => setOverdueOnly((current) => !current)}
         onClear={() => {
           setSearch("");
           setPriorities([]);
+          setOverdueOnly(false);
         }}
       />
       <DndContext
@@ -272,11 +276,11 @@ export function BoardScreen({ spaceId }: { spaceId: string }) {
         onDragEnd={onDragEnd}
       >
         <div className="flex flex-1 gap-4 overflow-x-auto px-6 py-5">
-          {visibleColumns(board, search, priorities).map((column, index) => (
+          {visibleColumns(board, search, priorities, overdueOnly).map((column, index) => (
             <ColumnLane
               key={column.id}
               column={column}
-              filtering={isFiltering(search, priorities)}
+              filtering={isFiltering(search, priorities, overdueOnly)}
               canMoveLeft={index > 0}
               canMoveRight={index < board.columns.length - 1}
               onRename={(name) => run(() => renameColumn(spaceId, column.id, name))}
@@ -293,7 +297,7 @@ export function BoardScreen({ spaceId }: { spaceId: string }) {
               }}
               onCreateTask={(title) => run(() => createTask(spaceId, column.id, title))}
               onOpen={setEditing}
-              draggable={!isFiltering(search, priorities)}
+              draggable={!isFiltering(search, priorities, overdueOnly)}
             />
           ))}
           <AddColumn onCreate={(name) => run(() => createColumn(spaceId, name))} />
@@ -301,7 +305,10 @@ export function BoardScreen({ spaceId }: { spaceId: string }) {
         <DragOverlay>
           {dragging ? (
             <article className="w-72 rounded-2xl border border-line bg-paper p-3 shadow-lg">
-              <TaskBody task={dragging} />
+              <TaskBody
+                task={dragging}
+                columnName={board.columns.find((column) => column.tasks.some((task) => task.id === dragging.id))?.name ?? ""}
+              />
             </article>
           ) : null}
         </DragOverlay>
@@ -472,7 +479,13 @@ function ColumnLane({
             <p className="px-1 py-2 text-sm text-muted">No matches</p>
           ) : null}
           {column.tasks.map((task) => (
-            <TaskCard key={task.id} task={task} draggable={draggable} onOpen={() => onOpen(task)} />
+            <TaskCard
+              key={task.id}
+              task={task}
+              columnName={column.name}
+              draggable={draggable}
+              onOpen={() => onOpen(task)}
+            />
           ))}
         </div>
       </SortableContext>
@@ -502,7 +515,17 @@ function ColumnLane({
   );
 }
 
-function TaskCard({ task, draggable, onOpen }: { task: Task; draggable: boolean; onOpen: () => void }) {
+function TaskCard({
+  task,
+  columnName,
+  draggable,
+  onOpen,
+}: {
+  task: Task;
+  columnName: string;
+  draggable: boolean;
+  onOpen: () => void;
+}) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: task.id,
     disabled: !draggable,
@@ -526,14 +549,15 @@ function TaskCard({ task, draggable, onOpen }: { task: Task; draggable: boolean;
           </button>
         ) : null}
         <button type="button" onClick={onOpen} className="min-w-0 flex-1 text-left">
-          <TaskBody task={task} />
+          <TaskBody task={task} columnName={columnName} />
         </button>
       </div>
     </article>
   );
 }
 
-function TaskBody({ task }: { task: Task }) {
+function TaskBody({ task, columnName }: { task: Task; columnName: string }) {
+  const overdue = isOverdue(task, columnName);
   return (
     <div className="min-w-0 flex-1">
       <div className="flex items-start justify-between gap-2">
@@ -541,6 +565,11 @@ function TaskBody({ task }: { task: Task }) {
         <AssigneeStack assignees={task.assignees} />
       </div>
       <TaskMeta task={task} />
+      {task.dueOn ? (
+        <p className={`mt-1 text-xs font-medium ${overdue ? "text-rose-700" : "text-muted"}`}>
+          {overdue ? "Overdue" : "Due"} {formatDue(task.dueOn)}
+        </p>
+      ) : null}
       {task.description ? <p className="mt-1 line-clamp-2 text-sm text-muted">{task.description}</p> : null}
     </div>
   );
@@ -591,6 +620,7 @@ function TaskEditor({
     userIds: string[];
     labels: TaskLabel[];
     priority: TaskPriority;
+    dueOn: { value: string | null };
   }) => Promise<void>;
   onDelete: () => Promise<void>;
 }) {
@@ -599,6 +629,7 @@ function TaskEditor({
   const [assignees, setAssignees] = useState(task.assignees);
   const [labels, setLabels] = useState(task.labels);
   const [priority, setPriority] = useState(task.priority);
+  const [dueOn, setDueOn] = useState(task.dueOn);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [entries, setEntries] = useState<TaskActivity[] | null>(null);
@@ -649,6 +680,7 @@ function TaskEditor({
                   userIds: assignees.map((person) => person.userId),
                   labels,
                   priority,
+                  dueOn: { value: dueOn },
                 });
               } catch (caught) {
                 setError(apiMessage(caught));
@@ -690,6 +722,23 @@ function TaskEditor({
               error={null}
               onSelect={setPriority}
             />
+            <label className="mt-4 block text-sm font-medium">
+              Due date
+              <span className="mt-1 flex items-center gap-2">
+                <input
+                  type="date"
+                  value={dueOn ?? ""}
+                  disabled={saving}
+                  onChange={(event) => setDueOn(event.target.value || null)}
+                  className="rounded-xl border border-line px-3 py-2 outline-none focus:border-accent"
+                />
+                {dueOn ? (
+                  <button type="button" className="text-sm text-muted" onClick={() => setDueOn(null)}>
+                    Clear
+                  </button>
+                ) : null}
+              </span>
+            </label>
             <AssigneePicker
               members={members}
               assignees={assignees}
@@ -838,21 +887,25 @@ const PRIORITY_ORDER: TaskPriority[] = ["LOW", "MEDIUM", "HIGH"];
 function BoardFilters({
   search,
   priorities,
+  overdueOnly,
   shown,
   total,
   onSearch,
   onTogglePriority,
+  onToggleOverdue,
   onClear,
 }: {
   search: string;
   priorities: TaskPriority[];
+  overdueOnly: boolean;
   shown: number;
   total: number;
   onSearch: (value: string) => void;
   onTogglePriority: (priority: TaskPriority) => void;
+  onToggleOverdue: () => void;
   onClear: () => void;
 }) {
-  const filtering = isFiltering(search, priorities);
+  const filtering = isFiltering(search, priorities, overdueOnly);
   return (
     <div className="flex flex-wrap items-center gap-3 border-b border-line px-6 py-3">
       <label className="min-w-56 flex-1">
@@ -882,6 +935,16 @@ function BoardFilters({
           );
         })}
       </div>
+      <button
+        type="button"
+        aria-pressed={overdueOnly}
+        onClick={onToggleOverdue}
+        className={`rounded-full border px-3 py-1 text-sm ${
+          overdueOnly ? "border-transparent bg-rose-100 text-rose-900" : "border-line bg-paper text-ink"
+        }`}
+      >
+        Overdue
+      </button>
       {filtering ? (
         <>
           <p className="text-sm text-muted">
@@ -986,26 +1049,35 @@ function PriorityPicker({
   );
 }
 
-function isFiltering(search: string, priorities: TaskPriority[]) {
-  return search.trim().length > 0 || priorities.length > 0;
+function isFiltering(search: string, priorities: TaskPriority[], overdueOnly: boolean) {
+  return search.trim().length > 0 || priorities.length > 0 || overdueOnly;
 }
 
 function taskCount(board: Board) {
   return board.columns.reduce((sum, column) => sum + column.tasks.length, 0);
 }
 
-function shownCount(board: Board, search: string, priorities: TaskPriority[]) {
-  return visibleColumns(board, search, priorities).reduce((sum, column) => sum + column.tasks.length, 0);
+function shownCount(board: Board, search: string, priorities: TaskPriority[], overdueOnly: boolean) {
+  return visibleColumns(board, search, priorities, overdueOnly).reduce((sum, column) => sum + column.tasks.length, 0);
 }
 
-function visibleColumns(board: Board, search: string, priorities: TaskPriority[]) {
+function visibleColumns(board: Board, search: string, priorities: TaskPriority[], overdueOnly: boolean) {
   return board.columns.map((column) => ({
     ...column,
-    tasks: column.tasks.filter((task) => taskVisible(task, search, priorities)),
+    tasks: column.tasks.filter((task) => taskVisible(task, column.name, search, priorities, overdueOnly)),
   }));
 }
 
-function taskVisible(task: Task, search: string, priorities: TaskPriority[]) {
+function taskVisible(
+  task: Task,
+  columnName: string,
+  search: string,
+  priorities: TaskPriority[],
+  overdueOnly: boolean,
+) {
+  if (overdueOnly && !isOverdue(task, columnName)) {
+    return false;
+  }
   if (priorities.length > 0 && !priorities.includes(task.priority)) {
     return false;
   }
@@ -1017,6 +1089,25 @@ function taskVisible(task: Task, search: string, priorities: TaskPriority[]) {
     .join("\n")
     .toLowerCase();
   return terms.every((term) => haystack.includes(term));
+}
+
+function isOverdue(task: Task, columnName: string) {
+  if (!task.dueOn || columnName.trim().toLowerCase() === "done") {
+    return false;
+  }
+  const today = new Date();
+  const iso = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+  return task.dueOn < iso;
+}
+
+function formatDue(iso: string) {
+  const [year, month, day] = iso.split("-").map(Number);
+  if (!year || !month || !day) {
+    return iso;
+  }
+  return new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric", year: "numeric" }).format(
+    new Date(year, month - 1, day),
+  );
 }
 
 function findColumn(board: Board, id: string) {

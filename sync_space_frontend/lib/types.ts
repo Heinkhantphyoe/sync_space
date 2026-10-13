@@ -38,6 +38,7 @@ export type Task = {
   assignees: Assignee[];
   priority: TaskPriority;
   labels: TaskLabel[];
+  dueOn: string | null;
 };
 
 export type Column = {
@@ -81,7 +82,8 @@ export type TaskActivityKind =
   | "UNASSIGNED"
   | "LABELED"
   | "UNLABELED"
-  | "PRIORITY_CHANGED";
+  | "PRIORITY_CHANGED"
+  | "DUE_CHANGED";
 
 export type TaskActivity = {
   id: string;

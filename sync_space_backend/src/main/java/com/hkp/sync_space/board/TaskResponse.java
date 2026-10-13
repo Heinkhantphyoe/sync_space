@@ -1,6 +1,7 @@
 package com.hkp.sync_space.board;
 
 import java.time.Instant;
+import java.time.LocalDate;
 import java.util.List;
 import java.util.UUID;
 
@@ -14,5 +15,6 @@ public record TaskResponse(
 		Instant updatedAt,
 		List<AssigneeResponse> assignees,
 		TaskPriority priority,
-		List<TaskLabel> labels) {
+		List<TaskLabel> labels,
+		LocalDate dueOn) {
 }

@@ -1,6 +1,7 @@
 package com.hkp.sync_space.board;
 
 import java.time.Instant;
+import java.time.LocalDate;
 import java.util.LinkedHashSet;
 import java.util.Set;
 import java.util.UUID;
@@ -70,6 +71,9 @@ public class Task {
 	@Enumerated(EnumType.STRING)
 	@Column(name = "label", nullable = false, length = 20)
 	private Set<TaskLabel> labels = new LinkedHashSet<>();
+
+	@Column(name = "due_on")
+	private LocalDate dueOn;
 
 	@Column(name = "created_at", nullable = false, columnDefinition = "timestamptz")
 	private Instant createdAt;

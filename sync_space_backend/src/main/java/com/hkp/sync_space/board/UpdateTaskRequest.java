@@ -10,5 +10,6 @@ public record UpdateTaskRequest(
 		@Size(max = 4000, message = "Description must be 4000 characters or fewer") String description,
 		List<UUID> userIds,
 		List<TaskLabel> labels,
-		TaskPriority priority) {
+		TaskPriority priority,
+		DueOnUpdate dueOn) {
 }

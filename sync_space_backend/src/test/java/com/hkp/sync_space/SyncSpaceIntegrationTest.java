@@ -475,6 +475,84 @@ class SyncSpaceIntegrationTest {
 				.andExpect(status().isNoContent());
 	}
 
+	@Test
+	void dueDateCanBeSetAndCleared() throws Exception {
+		register("ada.due@example.com", "Ada");
+		register("outsider.due@example.com", "Outsider");
+		String ada = login("ada.due@example.com");
+		String outsider = login("outsider.due@example.com");
+
+		MvcResult created = mvc.perform(post("/api/spaces")
+						.header("Authorization", "Bearer " + ada)
+						.contentType(MediaType.APPLICATION_JSON)
+						.content("{\"name\":\"Due\"}"))
+				.andExpect(status().isCreated())
+				.andReturn();
+		String spaceId = JsonPath.read(created.getResponse().getContentAsString(), "$.id");
+		MvcResult board = mvc.perform(get("/api/spaces/" + spaceId + "/board")
+						.header("Authorization", "Bearer " + ada))
+				.andExpect(status().isOk())
+				.andReturn();
+		String columnId = JsonPath.read(board.getResponse().getContentAsString(), "$.columns[0].id");
+
+		MvcResult added = mvc.perform(post("/api/spaces/" + spaceId + "/tasks")
+						.header("Authorization", "Bearer " + ada)
+						.contentType(MediaType.APPLICATION_JSON)
+						.content("{\"columnId\":\"" + columnId + "\",\"title\":\"Ship\"}"))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.columns[0].tasks[0].dueOn").value(org.hamcrest.Matchers.nullValue()))
+				.andReturn();
+		String taskId = JsonPath.read(added.getResponse().getContentAsString(), "$.columns[0].tasks[0].id");
+
+		mvc.perform(patch("/api/spaces/" + spaceId + "/tasks/" + taskId + "/due")
+						.header("Authorization", "Bearer " + outsider)
+						.contentType(MediaType.APPLICATION_JSON)
+						.content("{\"dueOn\":\"2026-10-20\"}"))
+				.andExpect(status().isForbidden());
+		mvc.perform(patch("/api/spaces/" + spaceId + "/tasks/" + taskId + "/due")
+						.header("Authorization", "Bearer " + ada)
+						.contentType(MediaType.APPLICATION_JSON)
+						.content("{\"dueOn\":\"tomorrow\"}"))
+				.andExpect(status().isBadRequest())
+				.andExpect(jsonPath("$.message").value("Invalid request"));
+		mvc.perform(patch("/api/spaces/" + spaceId + "/tasks/" + taskId + "/due")
+						.header("Authorization", "Bearer " + ada)
+						.contentType(MediaType.APPLICATION_JSON)
+						.content("{\"dueOn\":\"2026-10-20\"}"))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.columns[0].tasks[0].dueOn").value("2026-10-20"));
+		mvc.perform(patch("/api/spaces/" + spaceId + "/tasks/" + taskId + "/due")
+						.header("Authorization", "Bearer " + ada)
+						.contentType(MediaType.APPLICATION_JSON)
+						.content("{\"dueOn\":\"2026-10-20\"}"))
+				.andExpect(status().isOk());
+		mvc.perform(patch("/api/spaces/" + spaceId + "/tasks/" + taskId)
+						.header("Authorization", "Bearer " + ada)
+						.contentType(MediaType.APPLICATION_JSON)
+						.content("{\"title\":\"Ship it\"}"))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.columns[0].tasks[0].dueOn").value("2026-10-20"));
+		mvc.perform(patch("/api/spaces/" + spaceId + "/tasks/" + taskId)
+						.header("Authorization", "Bearer " + ada)
+						.contentType(MediaType.APPLICATION_JSON)
+						.content("{\"dueOn\":{\"value\":null}}"))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.columns[0].tasks[0].dueOn").value(org.hamcrest.Matchers.nullValue()));
+		mvc.perform(patch("/api/spaces/" + spaceId + "/tasks/" + taskId)
+						.header("Authorization", "Bearer " + ada)
+						.contentType(MediaType.APPLICATION_JSON)
+						.content("{\"dueOn\":{\"value\":\"2026-11-02\"}}"))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.columns[0].tasks[0].dueOn").value("2026-11-02"));
+
+		mvc.perform(get("/api/spaces/" + spaceId + "/tasks/" + taskId + "/activity")
+						.header("Authorization", "Bearer " + ada))
+				.andExpect(jsonPath("$.length()").value(5))
+				.andExpect(jsonPath("$[?(@.kind == 'DUE_CHANGED')].summary", hasItem("set the due date to Oct 20, 2026")))
+				.andExpect(jsonPath("$[?(@.kind == 'DUE_CHANGED')].summary", hasItem("cleared the due date")))
+				.andExpect(jsonPath("$[?(@.kind == 'DUE_CHANGED')].summary", hasItem("set the due date to Nov 2, 2026")));
+	}
+
 	private void register(String email, String name) throws Exception {
 		mvc.perform(post("/api/auth/register")
 						.contentType(MediaType.APPLICATION_JSON)
