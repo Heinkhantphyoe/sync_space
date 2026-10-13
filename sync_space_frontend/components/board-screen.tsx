@@ -48,6 +48,9 @@ export function BoardScreen({ spaceId, initialTaskId }: { spaceId: string; initi
   const [search, setSearch] = useState("");
   const [priorities, setPriorities] = useState<TaskPriority[]>([]);
   const [overdueOnly, setOverdueOnly] = useState(false);
+  const [assignees, setAssignees] = useState<string[]>([]);
+  const [labels, setLabels] = useState<TaskLabel[]>([]);
+  const query: BoardQuery = { search, priorities, overdueOnly, assignees, labels };
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
   const openedInitialTask = useRef(false);
 
@@ -263,10 +266,9 @@ export function BoardScreen({ spaceId, initialTaskId }: { spaceId: string; initi
       </header>
       {error ? <p className="px-6 pt-3 text-sm text-red-700">{error}</p> : null}
       <BoardFilters
-        search={search}
-        priorities={priorities}
-        overdueOnly={overdueOnly}
-        shown={shownCount(board, search, priorities, overdueOnly)}
+        query={query}
+        members={board.members}
+        shown={shownCount(board, query)}
         total={taskCount(board)}
         onSearch={setSearch}
         onTogglePriority={(priority) =>
@@ -275,10 +277,20 @@ export function BoardScreen({ spaceId, initialTaskId }: { spaceId: string; initi
           )
         }
         onToggleOverdue={() => setOverdueOnly((current) => !current)}
+        onToggleAssignee={(userId) =>
+          setAssignees((current) =>
+            current.includes(userId) ? current.filter((item) => item !== userId) : [...current, userId],
+          )
+        }
+        onToggleLabel={(label) =>
+          setLabels((current) => (current.includes(label) ? current.filter((item) => item !== label) : [...current, label]))
+        }
         onClear={() => {
           setSearch("");
           setPriorities([]);
           setOverdueOnly(false);
+          setAssignees([]);
+          setLabels([]);
         }}
       />
       <DndContext
@@ -288,11 +300,11 @@ export function BoardScreen({ spaceId, initialTaskId }: { spaceId: string; initi
         onDragEnd={onDragEnd}
       >
         <div className="flex flex-1 gap-4 overflow-x-auto px-6 py-5">
-          {visibleColumns(board, search, priorities, overdueOnly).map((column, index) => (
+          {visibleColumns(board, query).map((column, index) => (
             <ColumnLane
               key={column.id}
               column={column}
-              filtering={isFiltering(search, priorities, overdueOnly)}
+              filtering={isFiltering(query)}
               canMoveLeft={index > 0}
               canMoveRight={index < board.columns.length - 1}
               onRename={(name) => run(() => renameColumn(spaceId, column.id, name))}
@@ -309,7 +321,7 @@ export function BoardScreen({ spaceId, initialTaskId }: { spaceId: string; initi
               }}
               onCreateTask={(title) => run(() => createTask(spaceId, column.id, title))}
               onOpen={setEditing}
-              draggable={!isFiltering(search, priorities, overdueOnly)}
+              draggable={!isFiltering(query)}
             />
           ))}
           <AddColumn onCreate={(name) => run(() => createColumn(spaceId, name))} />
@@ -895,35 +907,47 @@ const PRIORITY_META: Record<TaskPriority, { name: string; chip: string }> = {
 
 const LABEL_ORDER: TaskLabel[] = ["BUG", "FEATURE", "DESIGN"];
 const PRIORITY_ORDER: TaskPriority[] = ["LOW", "MEDIUM", "HIGH"];
+const UNASSIGNED = "unassigned";
+
+type BoardQuery = {
+  search: string;
+  priorities: TaskPriority[];
+  overdueOnly: boolean;
+  assignees: string[];
+  labels: TaskLabel[];
+};
 
 function BoardFilters({
-  search,
-  priorities,
-  overdueOnly,
+  query,
+  members,
   shown,
   total,
   onSearch,
   onTogglePriority,
   onToggleOverdue,
+  onToggleAssignee,
+  onToggleLabel,
   onClear,
 }: {
-  search: string;
-  priorities: TaskPriority[];
-  overdueOnly: boolean;
+  query: BoardQuery;
+  members: Member[];
   shown: number;
   total: number;
   onSearch: (value: string) => void;
   onTogglePriority: (priority: TaskPriority) => void;
   onToggleOverdue: () => void;
+  onToggleAssignee: (userId: string) => void;
+  onToggleLabel: (label: TaskLabel) => void;
   onClear: () => void;
 }) {
-  const filtering = isFiltering(search, priorities, overdueOnly);
+  const filtering = isFiltering(query);
   return (
-    <div className="flex flex-wrap items-center gap-3 border-b border-line px-6 py-3">
+    <div className="flex flex-col gap-3 border-b border-line px-6 py-3">
+      <div className="flex flex-wrap items-center gap-3">
       <label className="min-w-56 flex-1">
         <span className="sr-only">Search tasks</span>
         <input
-          value={search}
+          value={query.search}
           onChange={(event) => onSearch(event.target.value)}
           placeholder="Search tasks"
           className="w-full rounded-xl border border-line bg-paper px-3 py-2 text-sm outline-none focus:border-accent"
@@ -931,7 +955,7 @@ function BoardFilters({
       </label>
       <div className="flex items-center gap-2" role="group" aria-label="Filter by priority">
         {PRIORITY_ORDER.map((priority) => {
-          const selected = priorities.includes(priority);
+          const selected = query.priorities.includes(priority);
           return (
             <button
               key={priority}
@@ -949,10 +973,10 @@ function BoardFilters({
       </div>
       <button
         type="button"
-        aria-pressed={overdueOnly}
+        aria-pressed={query.overdueOnly}
         onClick={onToggleOverdue}
         className={`rounded-full border px-3 py-1 text-sm ${
-          overdueOnly ? "border-transparent bg-rose-100 text-rose-900" : "border-line bg-paper text-ink"
+          query.overdueOnly ? "border-transparent bg-rose-100 text-rose-900" : "border-line bg-paper text-ink"
         }`}
       >
         Overdue
@@ -967,6 +991,53 @@ function BoardFilters({
           </button>
         </>
       ) : null}
+      </div>
+      <div className="flex flex-wrap items-center gap-2" role="group" aria-label="Filter by assignee">
+        <button
+          type="button"
+          aria-pressed={query.assignees.includes(UNASSIGNED)}
+          onClick={() => onToggleAssignee(UNASSIGNED)}
+          className={`rounded-full border px-3 py-1 text-sm ${
+            query.assignees.includes(UNASSIGNED) ? "border-transparent bg-stone-200 text-stone-800" : "border-line bg-paper text-ink"
+          }`}
+        >
+          Unassigned
+        </button>
+        {members.map((member) => {
+          const selected = query.assignees.includes(member.userId);
+          return (
+            <button
+              key={member.userId}
+              type="button"
+              aria-pressed={selected}
+              onClick={() => onToggleAssignee(member.userId)}
+              className={`rounded-full border px-3 py-1 text-sm ${
+                selected ? "border-transparent bg-teal-100 text-teal-900" : "border-line bg-paper text-ink"
+              }`}
+            >
+              {member.displayName}
+            </button>
+          );
+        })}
+      </div>
+      <div className="flex flex-wrap items-center gap-2" role="group" aria-label="Filter by label">
+        {LABEL_ORDER.map((label) => {
+          const selected = query.labels.includes(label);
+          return (
+            <button
+              key={label}
+              type="button"
+              aria-pressed={selected}
+              onClick={() => onToggleLabel(label)}
+              className={`rounded-full border px-3 py-1 text-sm ${
+                selected ? `${LABEL_META[label].chip} border-transparent` : "border-line bg-paper text-ink"
+              }`}
+            >
+              {LABEL_META[label].name}
+            </button>
+          );
+        })}
+      </div>
     </div>
   );
 }
@@ -1061,39 +1132,45 @@ function PriorityPicker({
   );
 }
 
-function isFiltering(search: string, priorities: TaskPriority[], overdueOnly: boolean) {
-  return search.trim().length > 0 || priorities.length > 0 || overdueOnly;
+function isFiltering(query: BoardQuery) {
+  return (
+    query.search.trim().length > 0 ||
+    query.priorities.length > 0 ||
+    query.overdueOnly ||
+    query.assignees.length > 0 ||
+    query.labels.length > 0
+  );
 }
 
 function taskCount(board: Board) {
   return board.columns.reduce((sum, column) => sum + column.tasks.length, 0);
 }
 
-function shownCount(board: Board, search: string, priorities: TaskPriority[], overdueOnly: boolean) {
-  return visibleColumns(board, search, priorities, overdueOnly).reduce((sum, column) => sum + column.tasks.length, 0);
+function shownCount(board: Board, query: BoardQuery) {
+  return visibleColumns(board, query).reduce((sum, column) => sum + column.tasks.length, 0);
 }
 
-function visibleColumns(board: Board, search: string, priorities: TaskPriority[], overdueOnly: boolean) {
+function visibleColumns(board: Board, query: BoardQuery) {
   return board.columns.map((column) => ({
     ...column,
-    tasks: column.tasks.filter((task) => taskVisible(task, column.name, search, priorities, overdueOnly)),
+    tasks: column.tasks.filter((task) => taskVisible(task, column.name, query)),
   }));
 }
 
-function taskVisible(
-  task: Task,
-  columnName: string,
-  search: string,
-  priorities: TaskPriority[],
-  overdueOnly: boolean,
-) {
-  if (overdueOnly && !isOverdue(task, columnName)) {
+function taskVisible(task: Task, columnName: string, query: BoardQuery) {
+  if (query.overdueOnly && !isOverdue(task, columnName)) {
     return false;
   }
-  if (priorities.length > 0 && !priorities.includes(task.priority)) {
+  if (query.priorities.length > 0 && !query.priorities.includes(task.priority)) {
     return false;
   }
-  const terms = search.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  if (query.labels.length > 0 && !query.labels.some((label) => task.labels.includes(label))) {
+    return false;
+  }
+  if (query.assignees.length > 0 && !assigneeMatches(task, query.assignees)) {
+    return false;
+  }
+  const terms = query.search.trim().toLowerCase().split(/\s+/).filter(Boolean);
   if (terms.length === 0) {
     return true;
   }
@@ -1101,6 +1178,13 @@ function taskVisible(
     .join("\n")
     .toLowerCase();
   return terms.every((term) => haystack.includes(term));
+}
+
+function assigneeMatches(task: Task, selected: string[]) {
+  const wantsUnassigned = selected.includes(UNASSIGNED);
+  const people = selected.filter((id) => id !== UNASSIGNED);
+  const matchesPerson = task.assignees.some((person) => people.includes(person.userId));
+  return matchesPerson || (wantsUnassigned && task.assignees.length === 0);
 }
 
 function isOverdue(task: Task, columnName: string) {
