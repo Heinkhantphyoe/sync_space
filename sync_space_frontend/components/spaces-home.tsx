@@ -56,7 +56,7 @@ export function SpacesHome() {
     <main className="px-8 py-10">
       <h1 className="text-3xl font-semibold tracking-tight">Your spaces</h1>
       <p className="mt-2 max-w-xl text-muted">
-        Each space is a shared board. Create one, invite someone who already has an account, and move work together.
+        Each space is a shared board. Create one, invite someone by email, and move work together.
       </p>
       <form onSubmit={onSubmit} className="mt-6 flex max-w-xl gap-2">
         <input

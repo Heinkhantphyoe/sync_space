@@ -11,6 +11,17 @@ export type AuthResponse = {
   user: User;
 };
 
+export type InviteOutcome = {
+  status: "JOINED" | "PENDING";
+  board: Board;
+};
+
+export type PendingInvite = {
+  id: string;
+  email: string;
+  createdAt: string;
+};
+
 export type SpaceSummary = {
   id: string;
   name: string;

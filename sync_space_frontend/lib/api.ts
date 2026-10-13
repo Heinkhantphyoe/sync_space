@@ -3,6 +3,8 @@ import type {
   AuthResponse,
   AssignedTask,
   Board,
+  InviteOutcome,
+  PendingInvite,
   SpaceSummary,
   TaskActivity,
   TaskLabel,
@@ -101,10 +103,18 @@ export function deleteSpace(spaceId: string) {
 }
 
 export function inviteMember(spaceId: string, email: string) {
-  return request<Board>(`/api/spaces/${spaceId}/members`, {
+  return request<InviteOutcome>(`/api/spaces/${spaceId}/members`, {
     method: "POST",
     body: JSON.stringify({ email }),
   });
+}
+
+export function listInvites(spaceId: string) {
+  return request<PendingInvite[]>(`/api/spaces/${spaceId}/invites`);
+}
+
+export function cancelInvite(spaceId: string, inviteId: string) {
+  return request<void>(`/api/spaces/${spaceId}/invites/${inviteId}`, { method: "DELETE" });
 }
 
 export function removeMember(spaceId: string, userId: string) {

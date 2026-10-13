@@ -55,8 +55,9 @@ class SyncSpaceIntegrationTest {
 						.contentType(MediaType.APPLICATION_JSON)
 						.content("{\"email\":\"grace@example.com\"}"))
 				.andExpect(status().isOk())
-				.andExpect(jsonPath("$.members[1].email").value("grace@example.com"))
-				.andExpect(jsonPath("$.members[1].role").value("MEMBER"));
+				.andExpect(jsonPath("$.status").value("JOINED"))
+				.andExpect(jsonPath("$.board.members[1].email").value("grace@example.com"))
+				.andExpect(jsonPath("$.board.members[1].role").value("MEMBER"));
 
 		String board = mvc.perform(get("/api/spaces/" + spaceId + "/board").header("Authorization", "Bearer " + grace))
 				.andExpect(status().isOk())
@@ -473,6 +474,70 @@ class SyncSpaceIntegrationTest {
 
 		mvc.perform(delete("/api/spaces/" + spaceId).header("Authorization", "Bearer " + ada))
 				.andExpect(status().isNoContent());
+	}
+
+	@Test
+	void unknownEmailIsInvitedUntilTheyRegister() throws Exception {
+		register("ada.invite@example.com", "Ada");
+		register("grace.invite@example.com", "Grace");
+		String ada = login("ada.invite@example.com");
+		String grace = login("grace.invite@example.com");
+
+		MvcResult created = mvc.perform(post("/api/spaces")
+						.header("Authorization", "Bearer " + ada)
+						.contentType(MediaType.APPLICATION_JSON)
+						.content("{\"name\":\"Invites\"}"))
+				.andExpect(status().isCreated())
+				.andReturn();
+		String spaceId = JsonPath.read(created.getResponse().getContentAsString(), "$.id");
+
+		mvc.perform(post("/api/spaces/" + spaceId + "/members")
+						.header("Authorization", "Bearer " + ada)
+						.contentType(MediaType.APPLICATION_JSON)
+						.content("{\"email\":\"New.Person@example.com\"}"))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.status").value("PENDING"))
+				.andExpect(jsonPath("$.board.members.length()").value(1));
+		String inviteId = JsonPath.read(
+				mvc.perform(get("/api/spaces/" + spaceId + "/invites").header("Authorization", "Bearer " + ada))
+						.andExpect(status().isOk())
+						.andExpect(jsonPath("$.length()").value(1))
+						.andExpect(jsonPath("$[0].email").value("new.person@example.com"))
+						.andReturn()
+						.getResponse()
+						.getContentAsString(),
+				"$[0].id");
+		mvc.perform(get("/api/spaces/" + spaceId + "/invites").header("Authorization", "Bearer " + grace))
+				.andExpect(status().isForbidden());
+		mvc.perform(post("/api/spaces/" + spaceId + "/members")
+						.header("Authorization", "Bearer " + ada)
+						.contentType(MediaType.APPLICATION_JSON)
+						.content("{\"email\":\"new.person@example.com\"}"))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.status").value("PENDING"));
+
+		mvc.perform(delete("/api/spaces/" + spaceId + "/invites/" + inviteId).header("Authorization", "Bearer " + grace))
+				.andExpect(status().isForbidden());
+		mvc.perform(delete("/api/spaces/" + spaceId + "/invites/" + inviteId).header("Authorization", "Bearer " + ada))
+				.andExpect(status().isNoContent());
+		mvc.perform(post("/api/spaces/" + spaceId + "/members")
+						.header("Authorization", "Bearer " + ada)
+						.contentType(MediaType.APPLICATION_JSON)
+						.content("{\"email\":\"new.person@example.com\"}"))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.status").value("PENDING"));
+
+		register("new.person@example.com", "New");
+		String newbie = login("new.person@example.com");
+		mvc.perform(get("/api/spaces/" + spaceId + "/board").header("Authorization", "Bearer " + newbie))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.role").value("MEMBER"));
+		mvc.perform(get("/api/spaces/" + spaceId + "/invites").header("Authorization", "Bearer " + ada))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$.length()").value(0));
+		mvc.perform(get("/api/spaces").header("Authorization", "Bearer " + newbie))
+				.andExpect(status().isOk())
+				.andExpect(jsonPath("$[0].name").value("Invites"));
 	}
 
 	@Test

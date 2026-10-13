@@ -58,8 +58,19 @@ public class SpaceController {
 	}
 
 	@PostMapping("/{spaceId}/members")
-	BoardResponse invite(@PathVariable UUID spaceId, @Valid @RequestBody InviteMemberRequest request) {
+	InviteOutcome invite(@PathVariable UUID spaceId, @Valid @RequestBody InviteMemberRequest request) {
 		return spaceService.invite(spaceId, CurrentUser.get(), request);
+	}
+
+	@GetMapping("/{spaceId}/invites")
+	List<PendingInviteResponse> invites(@PathVariable UUID spaceId) {
+		return spaceService.pendingInvites(spaceId, CurrentUser.get());
+	}
+
+	@DeleteMapping("/{spaceId}/invites/{inviteId}")
+	@ResponseStatus(HttpStatus.NO_CONTENT)
+	void cancelInvite(@PathVariable UUID spaceId, @PathVariable UUID inviteId) {
+		spaceService.cancelInvite(spaceId, inviteId, CurrentUser.get());
 	}
 
 	@DeleteMapping("/{spaceId}/members/{userId}")

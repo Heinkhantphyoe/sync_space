@@ -34,18 +34,21 @@ public class SpaceService {
 	private final BoardColumnRepository columnRepository;
 	private final TaskRepository taskRepository;
 	private final UserRepository userRepository;
+	private final SpaceInviteRepository inviteRepository;
 	private final SpaceAccess spaceAccess;
 	private final BoardService boardService;
 	private final ApplicationEventPublisher events;
 
 	public SpaceService(SpaceRepository spaceRepository, SpaceMemberRepository memberRepository,
 			BoardColumnRepository columnRepository, TaskRepository taskRepository, UserRepository userRepository,
-			SpaceAccess spaceAccess, BoardService boardService, ApplicationEventPublisher events) {
+			SpaceInviteRepository inviteRepository, SpaceAccess spaceAccess, BoardService boardService,
+			ApplicationEventPublisher events) {
 		this.spaceRepository = spaceRepository;
 		this.memberRepository = memberRepository;
 		this.columnRepository = columnRepository;
 		this.taskRepository = taskRepository;
 		this.userRepository = userRepository;
+		this.inviteRepository = inviteRepository;
 		this.spaceAccess = spaceAccess;
 		this.boardService = boardService;
 		this.events = events;
@@ -103,16 +106,61 @@ public class SpaceService {
 	}
 
 	@Transactional
-	public BoardResponse invite(UUID spaceId, AuthUser actor, InviteMemberRequest request) {
+	public InviteOutcome invite(UUID spaceId, AuthUser actor, InviteMemberRequest request) {
 		SpaceMember owner = spaceAccess.lockOwner(spaceId, actor.id());
 		String email = request.email().trim().toLowerCase();
-		User invitee = userRepository.findByEmail(email)
-				.orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "No account exists for that email"));
+		User invitee = userRepository.findByEmail(email).orElse(null);
+		if (invitee == null) {
+			if (!inviteRepository.existsBySpaceIdAndEmail(spaceId, email)) {
+				User actorUser = userRepository.findById(actor.id())
+						.orElseThrow(() -> new ApiException(HttpStatus.UNAUTHORIZED, "Login required"));
+				inviteRepository.save(new SpaceInvite(owner.getSpace(), email, actorUser));
+			}
+			return new InviteOutcome("PENDING", BoardResponses.from(boardService.loadState(spaceId), owner.getRole()));
+		}
 		if (memberRepository.existsBySpaceIdAndUserId(spaceId, invitee.getId())) {
 			throw new ApiException(HttpStatus.CONFLICT, "That person is already in this space");
 		}
+		inviteRepository.findBySpaceIdOrderByCreatedAtAsc(spaceId).stream()
+				.filter(invite -> invite.getEmail().equals(email))
+				.forEach(inviteRepository::delete);
 		memberRepository.save(new SpaceMember(owner.getSpace(), invitee, MemberRole.MEMBER));
-		return touchAndPublish(owner, BoardEvents.MEMBERS_CHANGED);
+		return new InviteOutcome("JOINED", touchAndPublish(owner, BoardEvents.MEMBERS_CHANGED));
+	}
+
+	public List<PendingInviteResponse> pendingInvites(UUID spaceId, AuthUser actor) {
+		SpaceMember member = spaceAccess.requireMember(spaceId, actor.id());
+		if (member.getRole() != MemberRole.OWNER) {
+			throw new ApiException(HttpStatus.FORBIDDEN, "Only the owner can do that");
+		}
+		return inviteRepository.findBySpaceIdOrderByCreatedAtAsc(spaceId).stream()
+				.map(invite -> new PendingInviteResponse(invite.getId(), invite.getEmail(), invite.getCreatedAt()))
+				.toList();
+	}
+
+	@Transactional
+	public void cancelInvite(UUID spaceId, UUID inviteId, AuthUser actor) {
+		spaceAccess.lockOwner(spaceId, actor.id());
+		SpaceInvite invite = inviteRepository.findByIdAndSpaceId(inviteId, spaceId)
+				.orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Invite not found"));
+		inviteRepository.delete(invite);
+	}
+
+	@Transactional
+	public void acceptPendingInvites(User user) {
+		List<SpaceInvite> invites = inviteRepository.findByEmail(user.getEmail());
+		for (SpaceInvite invite : invites) {
+			Space space = invite.getSpace();
+			if (!memberRepository.existsBySpaceIdAndUserId(space.getId(), user.getId())) {
+				memberRepository.save(new SpaceMember(space, user, MemberRole.MEMBER));
+			}
+			inviteRepository.delete(invite);
+			SpaceMember owner = memberRepository.findBySpaceId(space.getId()).stream()
+					.filter(membership -> membership.getRole() == MemberRole.OWNER)
+					.findFirst()
+					.orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Space not found"));
+			touchAndPublish(owner, BoardEvents.MEMBERS_CHANGED);
+		}
 	}
 
 	@Transactional

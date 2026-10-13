@@ -4,9 +4,9 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { createContext, useCallback, useContext, useEffect, useState } from "react";
 
-import { apiMessage, createSpace, getMe, inviteMember, listSpaces } from "@/lib/api";
+import { apiMessage, cancelInvite, createSpace, getMe, inviteMember, listInvites, listSpaces } from "@/lib/api";
 import { clearSession, getToken } from "@/lib/auth";
-import type { SpaceSummary, User } from "@/lib/types";
+import type { PendingInvite, SpaceSummary, User } from "@/lib/types";
 
 type ShellValue = {
   user: User;
@@ -39,6 +39,7 @@ export function AppShell({
   const [inviteEmail, setInviteEmail] = useState("");
   const [inviteError, setInviteError] = useState<string | null>(null);
   const [inviteNotice, setInviteNotice] = useState<string | null>(null);
+  const [pendingInvites, setPendingInvites] = useState<PendingInvite[]>([]);
 
   const refreshSpaces = useCallback(async () => {
     setSpaces(await listSpaces());
@@ -101,7 +102,27 @@ export function AppShell({
     setInviteEmail("");
     setInviteError(null);
     setInviteNotice(null);
-  }, [activeSpaceId]);
+    setPendingInvites([]);
+    const space = spaces.find((item) => item.id === activeSpaceId);
+    if (!activeSpaceId || space?.role !== "OWNER") {
+      return;
+    }
+    let cancelled = false;
+    listInvites(activeSpaceId)
+      .then((next) => {
+        if (!cancelled) {
+          setPendingInvites(next);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setPendingInvites([]);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeSpaceId, spaces]);
 
   async function onInvite(event: React.FormEvent) {
     event.preventDefault();
@@ -115,11 +136,20 @@ export function AppShell({
     setInviteError(null);
     setInviteNotice(null);
     try {
-      await inviteMember(activeSpace.id, email);
+      const result = await inviteMember(activeSpace.id, email);
       setInviteEmail("");
-      setInviteNotice(`${email} can open this space now.`);
+      setInviteNotice(
+        result.status === "PENDING"
+          ? `${email} will join when they create an account.`
+          : `${email} can open this space now.`,
+      );
+      if (result.status === "PENDING") {
+        setPendingInvites(await listInvites(activeSpace.id));
+      } else {
+        setPendingInvites((current) => current.filter((invite) => invite.email !== email.toLowerCase()));
+        window.dispatchEvent(new CustomEvent("sync-space-members-changed", { detail: activeSpace.id }));
+      }
       await refreshSpaces();
-      window.dispatchEvent(new CustomEvent("sync-space-members-changed", { detail: activeSpace.id }));
     } catch (caught) {
       setInviteError(apiMessage(caught));
     }
@@ -167,6 +197,26 @@ export function AppShell({
                 placeholder="Email address"
                 className="w-full rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-sm outline-none placeholder:text-stone-500 focus:border-teal-300"
               />
+              {pendingInvites.length > 0 ? (
+                <ul className="space-y-1">
+                  {pendingInvites.map((invite) => (
+                    <li key={invite.id} className="flex items-center justify-between gap-2 text-xs text-stone-300">
+                      <span className="truncate">{invite.email}</span>
+                      <button
+                        type="button"
+                        className="shrink-0 text-stone-400 hover:text-white"
+                        onClick={() => {
+                          void cancelInvite(activeSpace.id, invite.id)
+                            .then(() => setPendingInvites((current) => current.filter((item) => item.id !== invite.id)))
+                            .catch((caught) => setInviteError(apiMessage(caught)));
+                        }}
+                      >
+                        Cancel
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
               {inviteError ? <p className="text-xs text-red-300">{inviteError}</p> : null}
               {inviteNotice ? <p className="text-xs text-emerald-300">{inviteNotice}</p> : null}
               <button

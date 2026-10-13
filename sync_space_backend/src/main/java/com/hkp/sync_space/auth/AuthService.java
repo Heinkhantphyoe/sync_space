@@ -7,6 +7,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import com.hkp.sync_space.common.ApiException;
 import com.hkp.sync_space.config.JwtService;
+import com.hkp.sync_space.space.SpaceService;
 import com.hkp.sync_space.user.User;
 import com.hkp.sync_space.user.UserRepository;
 
@@ -16,11 +17,14 @@ public class AuthService {
 	private final UserRepository userRepository;
 	private final PasswordEncoder passwordEncoder;
 	private final JwtService jwtService;
+	private final SpaceService spaceService;
 
-	public AuthService(UserRepository userRepository, PasswordEncoder passwordEncoder, JwtService jwtService) {
+	public AuthService(UserRepository userRepository, PasswordEncoder passwordEncoder, JwtService jwtService,
+			SpaceService spaceService) {
 		this.userRepository = userRepository;
 		this.passwordEncoder = passwordEncoder;
 		this.jwtService = jwtService;
+		this.spaceService = spaceService;
 	}
 
 	@Transactional
@@ -31,6 +35,7 @@ public class AuthService {
 		}
 		User user = new User(email, passwordEncoder.encode(request.password()), request.displayName().trim());
 		userRepository.save(user);
+		spaceService.acceptPendingInvites(user);
 		return tokenFor(user);
 	}
 
